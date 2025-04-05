@@ -4,3 +4,4 @@ requests==2.31.0
 psycopg2==2.9.9
 xmltodict==0.13.0
 dicttoxml==1.7.16
+requests
