@@ -1,20 +1,65 @@
-
-
 import requests
+import json
 
 url = "http://localhost:5000/send"
 headers = {"Content-Type": "application/json"}
 
 data = {
-    "data": {
-            "message": "привет!",
-        "id": 456
-    },
+    "data": [
+        {
+            "Data": {
+                "CurrentTimestamp": "2025-04-01T11:00:00.846Z",
+                "TrnId": "000001",
+                "TrnType": "C2C",
+                "PayerData": {
+                    "ClientId": "00000000",
+                    "PAM": "Иван Иванович И",
+                    "FullName": "Иван Иванович Иванько",
+                    "Account": "40817111111111111111",
+                    "Address": "г. Мадрид, ул. Ленина, д. 1, кв. 20",
+                    "Direction": "Out",
+                    "PayerBIC": "044525225"
+                },
+                "BeneficiaryData": {
+                    "PAM": "Степан Степанович С",
+                    "FullName": "Степан Степанович Степанько",
+                    "BeneficiaryBIC": "044525593"
+                },
+                "Amount": "100",
+                "Currency": "RUB",
+                "Narrative": "Перевод по СБП без комиссии"
+            }
+        },
+        {
+            "Data": {
+                "CurrentTimestamp": "2025-04-01T12:00:00.000Z",
+                "TrnId": "000002",
+                "TrnType": "C2C",
+                "PayerData": {
+                    "ClientId": "11111111",
+                    "PAM": "Пётр Петрович П",
+                    "FullName": "Пётр Петрович Петров",
+                    "Account": "40817222222222222222",
+                    "Address": "г. Москва, ул. Победы, д. 5, кв. 10",
+                    "Direction": "Out",
+                    "PayerBIC": "044525226"
+                },
+                "BeneficiaryData": {
+                    "PAM": "Сергей Сергеевич С",
+                    "FullName": "Сергей Сергеевич Сергеев",
+                    "BeneficiaryBIC": "044525594"
+                },
+                "Amount": "200",
+                "Currency": "RUB",
+                "Narrative": "Оплата услуг"
+            }
+        }
+    ],
     "format": "json"
 }
 
 response = requests.post(url, json=data, headers=headers)
-print(response.status_code, response.json())
+print(response.status_code, json.dumps(response.json(), indent=2, ensure_ascii=False))
 
 '''
 
