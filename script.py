@@ -1,6 +1,6 @@
 """
 Скрипт для создания схемы БД на контуре отправителя, генерации пользователей и генерации JSON-файлов транзакций.
-Теперь структура payload читается из шаблона `payload_template.json`.
+структура payload читается из шаблона `payload_template.json`.
 """
 import os
 import json
@@ -106,9 +106,11 @@ with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
     template = json.load(f)
 
 # Ожидается, что шаблон имеет ключ 'Data' внутри
-base_data = template.get('Data')
-if base_data is None:
-    raise KeyError("В шаблоне должен быть ключ 'Data'.")
+try:
+    base_data = template['data'][0]['Data']
+except (KeyError, IndexError, TypeError):
+    raise KeyError("В шаблоне должен быть путь ['data'][0]['Data'].")
+
 
 # ----- Генерация файлов транзакций на основе шаблона -----
 for n in range(1, NUM_TRANSACTIONS + 1):
