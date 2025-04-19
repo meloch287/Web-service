@@ -1,7 +1,3 @@
-"""
-Скрипт для создания схемы БД на контуре отправителя, генерации пользователей и генерации JSON-файлов транзакций.
-структура payload читается из шаблона `payload_template.json`.
-"""
 import os
 import json
 import random
@@ -32,27 +28,89 @@ BIC_CODES = [
 
 # SQL схема отправителя (таблицы users и transactions)
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    client_id VARCHAR(8) UNIQUE NOT NULL,
-    pam VARCHAR(100) NOT NULL,
-    full_name VARCHAR(200) NOT NULL,
-    account VARCHAR(32) NOT NULL,
-    address TEXT NOT NULL,
-    direction VARCHAR(10) DEFAULT 'Out' NOT NULL,
-    bic VARCHAR(9) NOT NULL
+CREATE TABLE IF NOT EXISTS "transactions" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"src_id" BIGSERIAL,
+	"dst_id" BIGSERIAL,
+	"value" NUMERIC,
+	"type_id" BIGSERIAL,
+	"bnk_src_id" BIGSERIAL,
+	"bnk_dst_id" BIGSERIAL,
+	"timestamp" TIMESTAMP,
+	"comment" TEXT,
+	"status_id" BIGSERIAL,
+	PRIMARY KEY("id")
 );
 
-CREATE TABLE IF NOT EXISTS transactions (
-    id SERIAL PRIMARY KEY,
-    trn_id VARCHAR(6) UNIQUE NOT NULL,
-    client_id VARCHAR(8) REFERENCES users(client_id),
-    beneficiary_bic VARCHAR(9) NOT NULL,
-    amount NUMERIC(12,2) NOT NULL,
-    currency CHAR(3) DEFAULT 'RUB' NOT NULL,
-    narrative TEXT,
-    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS "clients" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"name" TEXT,
+	"comment" TEXT,
+	PRIMARY KEY("id")
 );
+
+CREATE TABLE IF NOT EXISTS "bank_account" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"client_id" BIGSERIAL,
+	"sum" DOUBLE PRECISION,
+	PRIMARY KEY("id")
+);
+
+CREATE TABLE IF NOT EXISTS "transaction_types" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"type" TEXT,
+	PRIMARY KEY("id")
+);
+
+CREATE TABLE IF NOT EXISTS "transaction_status" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"status" TEXT,
+	PRIMARY KEY("id")
+);
+
+CREATE TABLE IF NOT EXISTS "banks" (
+	"id" BIGSERIAL NOT NULL UNIQUE,
+	"bank_name" TEXT,
+	PRIMARY KEY("id")
+);
+
+CREATE TABLE IF NOT EXISTS "users" (
+	"client_id" TEXT,
+	"pam" TEXT,
+	"full_name" TEXT,
+	"account" TEXT,
+	"address" TEXT,
+	"direction" TEXT,
+	"bic" TEXT
+);
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("src_id") REFERENCES "clients"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("dst_id") REFERENCES "clients"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "bank_account"
+ADD FOREIGN KEY("client_id") REFERENCES "clients"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("type_id") REFERENCES "transaction_types"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("bnk_src_id") REFERENCES "banks"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("bnk_dst_id") REFERENCES "banks"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
+
+ALTER TABLE "transactions"
+ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
+ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
 
 # ----- Подготовка директории -----
@@ -66,6 +124,8 @@ conn = psycopg2.connect(
 conn.autocommit = True
 cur = conn.cursor()
 cur.execute(SCHEMA_SQL)
+cur.execute("DELETE FROM users")
+
 
 # ----- Генерация пользователей -----
 fake = Faker('ru_RU')
@@ -83,7 +143,6 @@ for i in range(1, NUM_USERS + 1):
         """
         INSERT INTO users(client_id, pam, full_name, account, address, direction, bic)
         VALUES (%s, %s, %s, %s, %s, 'Out', %s)
-        ON CONFLICT (client_id) DO NOTHING;
         """,
         (client_id, pam, full_name, account, address, bic)
     )
@@ -96,6 +155,7 @@ for i in range(1, NUM_USERS + 1):
         'direction': 'Out',
         'bic': bic
     })
+
 conn.commit()
 print(f"Inserted {len(users)} users into DB.")
 
@@ -105,14 +165,12 @@ if not os.path.exists(TEMPLATE_FILE):
 with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
     template = json.load(f)
 
-# Ожидается, что шаблон имеет ключ 'Data' внутри
 try:
     base_data = template['data'][0]['Data']
 except (KeyError, IndexError, TypeError):
     raise KeyError("В шаблоне должен быть путь ['data'][0]['Data'].")
 
-
-# ----- Генерация файлов транзакций на основе шаблона -----
+# ----- Генерация файлов транзакций -----
 for n in range(1, NUM_TRANSACTIONS + 1):
     trn_id = f"{n:06d}"
     payer = random.choice(users)
@@ -128,7 +186,6 @@ for n in range(1, NUM_TRANSACTIONS + 1):
         ''
     ])
 
-    # Создаём копию шаблона и заполняем поля
     data_payload = dict(base_data)
     data_payload.update({
         'CurrentTimestamp': datetime.utcnow().isoformat() + 'Z',
