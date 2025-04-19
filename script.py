@@ -29,59 +29,59 @@ BIC_CODES = [
 # SQL схема отправителя (таблицы users и transactions)
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS "transactions" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"src_id" BIGSERIAL,
-	"dst_id" BIGSERIAL,
-	"value" NUMERIC,
-	"type_id" BIGSERIAL,
-	"bnk_src_id" BIGSERIAL,
-	"bnk_dst_id" BIGSERIAL,
-	"timestamp" TIMESTAMP,
-	"comment" TEXT,
-	"status_id" BIGSERIAL,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "src_id" BIGINT,
+    "dst_id" BIGINT,
+    "value" NUMERIC,
+    "type_id" BIGINT,
+    "bnk_src_id" BIGINT,
+    "bnk_dst_id" BIGINT,
+    "timestamp" TIMESTAMP,
+    "comment" TEXT,
+    "status_id" BIGINT,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "clients" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"name" TEXT,
-	"comment" TEXT,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "name" TEXT,
+    "comment" TEXT,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "bank_account" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"client_id" BIGSERIAL,
-	"sum" DOUBLE PRECISION,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "client_id" BIGINT,
+    "sum" DOUBLE PRECISION,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "transaction_types" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"type" TEXT,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "type" TEXT,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "transaction_status" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"status" TEXT,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "status" TEXT,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "banks" (
-	"id" BIGSERIAL NOT NULL UNIQUE,
-	"bank_name" TEXT,
-	PRIMARY KEY("id")
+    "id" BIGSERIAL NOT NULL UNIQUE,
+    "bank_name" TEXT,
+    PRIMARY KEY("id")
 );
 
 CREATE TABLE IF NOT EXISTS "users" (
-	"client_id" TEXT,
-	"pam" TEXT,
-	"full_name" TEXT,
-	"account" TEXT,
-	"address" TEXT,
-	"direction" TEXT,
-	"bic" TEXT
+    "client_id" TEXT UNIQUE,
+    "pam" TEXT,
+    "full_name" TEXT,
+    "account" TEXT,
+    "address" TEXT,
+    "direction" TEXT,
+    "bic" TEXT
 );
 
 ALTER TABLE "transactions"
@@ -116,7 +116,7 @@ ON UPDATE NO ACTION ON DELETE NO ACTION;
 # ----- Подготовка директории -----
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ----- Создание схемы БД -----
+# ----- Подключение к БД и создание схемы -----
 conn = psycopg2.connect(
     dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
     host=DB_HOST, port=DB_PORT
@@ -126,10 +126,10 @@ cur = conn.cursor()
 cur.execute(SCHEMA_SQL)
 cur.execute("DELETE FROM users")
 
-
 # ----- Генерация пользователей -----
 fake = Faker('ru_RU')
 users = []
+
 for i in range(1, NUM_USERS + 1):
     client_id = f"{i:08d}"
     name = fake.name()
@@ -143,9 +143,11 @@ for i in range(1, NUM_USERS + 1):
         """
         INSERT INTO users(client_id, pam, full_name, account, address, direction, bic)
         VALUES (%s, %s, %s, %s, %s, 'Out', %s)
+        ON CONFLICT (client_id) DO NOTHING
         """,
         (client_id, pam, full_name, account, address, bic)
     )
+
     users.append({
         'client_id': client_id,
         'pam': pam,
