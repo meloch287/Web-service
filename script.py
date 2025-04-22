@@ -2,7 +2,7 @@ import os
 import json
 import random
 from datetime import datetime
-
+import requests
 import psycopg2
 from faker import Faker
 
@@ -113,13 +113,18 @@ ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
 
+SENDER_URL = "http://localhost:5000/send"
+
 # ----- Подготовка директории -----
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----- Подключение к БД и создание схемы -----
 conn = psycopg2.connect(
-    dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
-    host=DB_HOST, port=DB_PORT
+    dbname=DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD,
+    host=DB_HOST,
+    port=DB_PORT
 )
 conn.autocommit = True
 cur = conn.cursor()
@@ -172,7 +177,7 @@ try:
 except (KeyError, IndexError, TypeError):
     raise KeyError("В шаблоне должен быть путь ['data'][0]['Data'].")
 
-# ----- Генерация файлов транзакций -----
+# ----- Генерация и сохранение файлов транзакций -----
 for n in range(1, NUM_TRANSACTIONS + 1):
     trn_id = f"{n:06d}"
     payer = random.choice(users)
@@ -220,6 +225,26 @@ for n in range(1, NUM_TRANSACTIONS + 1):
         print(f"Generated {n} transactions...")
 
 print(f"All {NUM_TRANSACTIONS} transaction files created in '{OUTPUT_DIR}'.")
+
+# ----- Отправка каждого payload на Sender -----
+for n in range(1, NUM_TRANSACTIONS + 1):
+    file_path = os.path.join(OUTPUT_DIR, f"txn_{n:06d}.json")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+
+    try:
+        resp = requests.post(
+            SENDER_URL,
+            json={
+                "data": payload["data"],
+                "format": "json"
+            },
+            timeout=10
+        )
+        resp.raise_for_status()
+        print(f"[{n:06d}] Sent → {resp.status_code}: {resp.json()}")
+    except Exception as e:
+        print(f"[{n:06d}] ERROR sending: {e}")
 
 # ----- Закрытие соединения -----
 cur.close()
