@@ -1,3 +1,4 @@
+import os
 import json
 import random
 import time
@@ -8,7 +9,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from faker import Faker
-import os
 
 # --- Настройки базы данных ---
 DB_USER = "vtsk"
@@ -153,7 +153,7 @@ for i in range(1, NUM_USERS + 1):
         (client_id, pam, name, account, address, bic)
     )
 
-    # Сохранение данных пользователя в список для дальнейшего использования
+    # Сохранение данных пользователя в список
     users.append({
         'client_id': client_id,
         'pam': pam,
@@ -210,31 +210,52 @@ print("Создание транзакций завершено.")
 
 # Параметры Гауссова распределения
 TOTAL_HOURS = 24
-TOTAL_SECONDS = TOTAL_HOURS * 3600
-mu = TOTAL_SECONDS / 2  # Среднее значение (середина 24-часового периода)
-sigma = TOTAL_SECONDS / 6  # Стандартное отклонение
+TOTAL_SECONDS = TOTAL_HOURS * 3600  # 24 часа в секундах
+mu = TOTAL_SECONDS / 2  # Среднее значение (12 часов = 43,200 секунд)
+sigma = TOTAL_SECONDS / 6  # Стандартное отклонение (4 часа = 14,400 секунд)
+
+# Функция масштабирования времени
+def scale_time(timestamps, target_duration_minutes):
+    """
+    Масштабирует временные метки, чтобы уложиться в target_duration_minutes минут.
+    timestamps: массив временных меток в секундах (0–86,400)
+    target_duration_minutes: желаемая длительность в минутах
+    Возвращает масштабированные временные метки.
+    """
+    target_duration_seconds = target_duration_minutes * 60
+    scale_factor = target_duration_seconds / TOTAL_SECONDS
+    return timestamps * scale_factor
 
 # Генерация временных меток
 timestamps = np.random.normal(mu, sigma, NUM_TRANSACTIONS)
 timestamps = np.clip(timestamps, 0, TOTAL_SECONDS)  # Ограничение диапазона
 timestamps.sort()
 
-# Вычисление интервалов между транзакциями
-intervals = np.diff(timestamps, prepend=0)
-
-# Визуализация распределения транзакций
+# Визуализация ожидаемого распределения транзакций
 plt.hist(timestamps / 3600, bins=100, density=True, color='blue', alpha=0.7)
 plt.xlabel('Время (часы)')
 plt.ylabel('Плотность транзакций')
-plt.title('Распределение 30,000 транзакций за 24 часа')
+plt.title('Ожидаемое распределение 30,000 транзакций за 24 часа')
 plt.grid(True)
 plt.show()
 
-# Отправка транзакций на сервер
+# Масштабирование времени (например, 24 часа в 30 минут)
+SIMULATION_DURATION_MINUTES = 30  # Длительность симуляции в минутах
+scaled_timestamps = scale_time(timestamps, SIMULATION_DURATION_MINUTES)
+scaled_timestamps.sort()
+
+# Вычисление интервалов между транзакциями
+intervals = np.diff(scaled_timestamps, prepend=0)
+
+# Отправка транзакций на сервер и сохранение фактических временных меток
+actual_timestamps = []  # Для хранения фактического времени отправки
 print("Начало отправки транзакций...")
 start_time = time.time()
 for i, interval in enumerate(intervals):
     time.sleep(interval)  # Задержка перед отправкой
+    current_time = time.time() - start_time  # Текущее время с начала симуляции
+    actual_timestamps.append(current_time)  # Сохранение фактической метки времени
+
     file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
     with open(file_path, 'r', encoding='utf-8') as f:
         payload = json.load(f)
@@ -256,6 +277,19 @@ for i, interval in enumerate(intervals):
 end_time = time.time()
 print(f"Отправка завершена. Время выполнения: {(end_time - start_time):.2f} секунд")
 
-# Закрытие соединения с бд
+# Обратное масштабирование фактических временных меток для отображения в 24-часовом формате
+actual_timestamps = np.array(actual_timestamps)
+scale_factor = (SIMULATION_DURATION_MINUTES * 60) / TOTAL_SECONDS
+actual_timestamps_rescaled = actual_timestamps / scale_factor
+
+# Визуализация фактического распределения
+plt.hist(actual_timestamps_rescaled / 3600, bins=100, density=True, color='green', alpha=0.7)
+plt.xlabel('Время (часы)')
+plt.ylabel('Плотность транзакций')
+plt.title('Фактическое распределение 30,000 транзакций за 24 часа')
+plt.grid(True)
+plt.show()
+
+# Закрытие соединения с базой данных
 cur.close()
 conn.close()
