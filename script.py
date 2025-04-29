@@ -7,7 +7,7 @@ import requests
 import psycopg2
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import norm
+from scipy.stats import norm, gaussian_kde
 from faker import Faker
 
 # --- Настройки базы данных ---
@@ -118,74 +118,52 @@ ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Подключение к базе данных PostgreSQL
-conn = psycopg2.connect(
-    dbname=DB_NAME,
-    user=DB_USER,
-    password=DB_PASSWORD,
-    host=DB_HOST,
-    port=DB_PORT
-)
+conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
 conn.autocommit = True
 cur = conn.cursor()
 cur.execute(SCHEMA_SQL)
-cur.execute("DELETE FROM users")  # Очистка таблицы перед генерацией
+cur.execute("DELETE FROM users")
 
-# Генерация пользователей
+# --- Генерация пользователей ---
 fake = Faker('ru_RU')
 users = []
 for i in range(1, NUM_USERS + 1):
-    client_id = f"{i:08d}"  # Уникальный ID клиента
+    client_id = f"{i:08d}"
     name = fake.name()
-    pam = name[:100]  # Ограничение длины для поля pam
-    account = '40817' + ''.join(random.choice('0123456789') for _ in range(16))  # Генерация номера счета
+    pam = name[:100]
+    account = '40817' + ''.join(random.choice('0123456789') for _ in range(16))
     address = fake.address().replace('\n', ', ')
     bic = random.choice(BIC_CODES)
 
-    # Вставка пользователя в базу данных
-    cur.execute(
-        """
+    cur.execute("""
         INSERT INTO users(client_id, pam, full_name, account, address, direction, bic)
         VALUES (%s, %s, %s, %s, %s, 'Out', %s)
         ON CONFLICT (client_id) DO NOTHING
-        """,
-        (client_id, pam, name, account, address, bic)
-    )
+    """, (client_id, pam, name, account, address, bic))
 
-    # Сохранение данных пользователя в список
-    users.append({
-        'client_id': client_id,
-        'pam': pam,
-        'full_name': name,
-        'account': account,
-        'address': address,
-        'direction': 'Out',
-        'bic': bic
-    })
+    users.append({"client_id": client_id, "pam": pam, "full_name": name, "account": account,
+                  "address": address, "direction": "Out", "bic": bic})
 
 conn.commit()
 print(f"Вставлено {len(users)} пользователей в базу данных.")
 
-# Чтение шаблона транзакции
+# --- Загрузка шаблона транзакции ---
 if not os.path.exists(TEMPLATE_FILE):
     raise FileNotFoundError(f"Файл: '{TEMPLATE_FILE}' не найден.")
 with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
     template = json.load(f)
 base_data = template['data'][0]['Data']
 
-# Генерация транзакций
+# --- Генерация транзакций ---
 for n in range(1, NUM_TRANSACTIONS + 1):
-    trn_id = f"{n:06d}"  # Уникальный ID транзакции
-    payer = random.choice(users)  # Выбор плательщика
-    beneficiary = random.choice(users)  # Выбор получателя
-    while beneficiary['client_id'] == payer['client_id']:  # Проверка, чтобы плательщик и получатель не совпадали
+    trn_id = f"{n:06d}"
+    payer = random.choice(users)
+    beneficiary = random.choice(users)
+    while beneficiary['client_id'] == payer['client_id']:
         beneficiary = random.choice(users)
+    amount = round(random.uniform(1, 150000), 2)
+    narrative = random.choice(['Перевод по СБП', 'Оплата услуг', 'Перевод другу', ''])
 
-    amount = round(random.uniform(1, 150000), 2)  # Сумма транзакции
-    narrative = random.choice(['Перевод по СБП', 'Оплата услуг', 'Перевод другу', ''])  # Описание
-
-    # Формирование данных транзакции
     data_payload = dict(base_data)
     data_payload.update({
         'CurrentTimestamp': datetime.utcnow().isoformat() + 'Z',
@@ -198,7 +176,6 @@ for n in range(1, NUM_TRANSACTIONS + 1):
         'Narrative': narrative
     })
 
-    # Сохранение транзакции в JSON-файл
     file_path = os.path.join(OUTPUT_DIR, f'txn_{trn_id}.json')
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump({'data': data_payload}, f, ensure_ascii=False, indent=2)
@@ -208,53 +185,60 @@ for n in range(1, NUM_TRANSACTIONS + 1):
 
 print("Создание транзакций завершено.")
 
-# Параметры Гауссова распределения
 TOTAL_HOURS = 24
-TOTAL_SECONDS = TOTAL_HOURS * 3600  # 24 часа в секундах
-mu = TOTAL_SECONDS / 2  # Среднее значение (12 часов = 43,200 секунд)
-sigma = TOTAL_SECONDS / 6  # Стандартное отклонение (4 часа = 14,400 секунд)
+A = NUM_TRANSACTIONS
+mu = 12
+sigma = 6
 
-# Функция масштабирования времени
-def scale_time(timestamps, target_duration_minutes):
-    """
-    Масштабирует временные метки, чтобы уложиться в target_duration_minutes минут.
-    timestamps: массив временных меток в секундах (0–86,400)
-    target_duration_minutes: желаемая длительность в минутах
-    Возвращает масштабированные временные метки.
-    """
-    target_duration_seconds = target_duration_minutes * 60
-    scale_factor = target_duration_seconds / TOTAL_SECONDS
-    return timestamps * scale_factor
+# Основная плотность (нормальное распределение)
+hours = np.linspace(0, 24, NUM_TRANSACTIONS)
+main_density = (A / (sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - mu) ** 2) / (2 * sigma ** 2))
 
-# Генерация временных меток
-timestamps = np.random.normal(mu, sigma, NUM_TRANSACTIONS)
-timestamps = np.clip(timestamps, 0, TOTAL_SECONDS)  # Ограничение диапазона
-timestamps.sort()
+# Аномалия: всплеск в 19:00
+anomaly_mu = 19
+anomaly_sigma = 0.5
+anomaly_amplitude = A * 0.2
+anomaly_density = (anomaly_amplitude / (anomaly_sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - anomaly_mu) ** 2) / (2 * anomaly_sigma ** 2))
 
-# Визуализация ожидаемого распределения транзакций
-plt.hist(timestamps / 3600, bins=100, density=True, color='blue', alpha=0.7)
-plt.xlabel('Время (часы)')
-plt.ylabel('Плотность транзакций')
-plt.title('Ожидаемое распределение 30,000 транзакций за 24 часа')
+# Суммируем основную плотность и аномалию
+combined_density = main_density + anomaly_density
+
+# Вычисляем кумулятивную функцию распределения (CDF)
+cdf = np.cumsum(combined_density)
+cdf = cdf / cdf[-1]  # Нормируем, чтобы CDF[-1] = 1
+
+# Генерируем времена отправки в часах (от 0 до 24)
+u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
+send_hours = np.interp(u, cdf, hours)
+
+# Масштабируем времена в секунды симуляции (24 часа → 30 минут)
+total_sim_seconds = 30 * 2  # 60 секунд
+scale_factor = total_sim_seconds / 24  # 75 секунд на час
+send_times = send_hours * scale_factor
+
+# Сортируем времена и вычисляем задержки
+send_times.sort()
+delays = np.diff(send_times, prepend=0)
+
+# Визуализация ожидаемого распределения
+plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+plt.title('Ожидаемое распределение нагрузки с аномалией в 19:00')
+plt.xlabel('Часы суток')
+plt.ylabel('Плотность')
+plt.legend()
 plt.grid(True)
+plt.tight_layout()
+plt.savefig("combined_intensity_with_anomaly.png")
 plt.show()
 
-# Масштабирование времени (например, 24 часа в 30 минут)
-SIMULATION_DURATION_MINUTES = 30  # Длительность симуляции в минутах
-scaled_timestamps = scale_time(timestamps, SIMULATION_DURATION_MINUTES)
-scaled_timestamps.sort()
-
-# Вычисление интервалов между транзакциями
-intervals = np.diff(scaled_timestamps, prepend=0)
-
-# Отправка транзакций на сервер и сохранение фактических временных меток
-actual_timestamps = []  # Для хранения фактического времени отправки
+# --- Отправка транзакций ---
 print("Начало отправки транзакций...")
 start_time = time.time()
-for i, interval in enumerate(intervals):
-    time.sleep(interval)  # Задержка перед отправкой
-    current_time = time.time() - start_time  # Текущее время с начала симуляции
-    actual_timestamps.append(current_time)  # Сохранение фактической метки времени
+actual_timestamps = []
+for i, delay in enumerate(delays):
+    time.sleep(delay)
+    current_time = time.time() - start_time
+    actual_timestamps.append(current_time)
 
     file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -271,25 +255,30 @@ for i, interval in enumerate(intervals):
     except Exception as e:
         print(f"[{i+1:06d}] Ошибка отправки: {e}")
 
-    if i % 1000 == 0:
-        print(f"Отправлено {i+1} транзакций")
-
 end_time = time.time()
-print(f"Отправка завершена. Время выполнения: {(end_time - start_time):.2f} секунд")
+print(f"Отправка завершена. Время выполнения: {end_time - start_time:.2f} секунд")
 
-# Обратное масштабирование фактических временных меток для отображения в 24-часовом формате
-actual_timestamps = np.array(actual_timestamps)
-scale_factor = (SIMULATION_DURATION_MINUTES * 60) / TOTAL_SECONDS
-actual_timestamps_rescaled = actual_timestamps / scale_factor
+# Проверка общего времени симуляции
+total_simulation_time = send_times[-1]
+print(f"Общее время симуляции: {total_simulation_time:.2f} секунд")
 
-# Визуализация фактического распределения
-plt.hist(actual_timestamps_rescaled / 3600, bins=100, density=True, color='green', alpha=0.7)
-plt.xlabel('Время (часы)')
-plt.ylabel('Плотность транзакций')
-plt.title('Фактическое распределение 30,000 транзакций за 24 часа')
+# --- Визуализация фактической и ожидаемой нагрузки ---
+actual_hours = send_times / total_sim_seconds * 24
+
+# Используем KDE для сглаживания фактического распределения
+kde = gaussian_kde(actual_hours)
+x = np.linspace(0, 24, 1000)
+plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
+# plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+plt.title("Сравнение ожидаемой и фактической нагрузки")
+plt.xlabel("Часы")
+plt.ylabel("Плотность")
+plt.legend()
 plt.grid(True)
+plt.tight_layout()
+plt.savefig("comparison_load_with_anomaly.png")
 plt.show()
 
-# Закрытие соединения с базой данных
+# --- Закрытие соединения ---
 cur.close()
 conn.close()
