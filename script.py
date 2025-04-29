@@ -117,6 +117,7 @@ ALTER TABLE "transactions"
 ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
 conn.autocommit = True
@@ -185,50 +186,66 @@ for n in range(1, NUM_TRANSACTIONS + 1):
 
 print("Создание транзакций завершено.")
 
+# --- Генерация времени отправки с аномалиями ---
 TOTAL_HOURS = 24
-A = NUM_TRANSACTIONS
-mu = 12
-sigma = 6
+A = NUM_TRANSACTIONS  # Амплитуда основного распределения
+mu = 12              # Среднее основного распределения (полдень)
+sigma = 6            # Стандартное отклонение основного распределения
 
 # Основная плотность (нормальное распределение)
 hours = np.linspace(0, 24, NUM_TRANSACTIONS)
 main_density = (A / (sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - mu) ** 2) / (2 * sigma ** 2))
 
-# Аномалия: всплеск в 19:00
-anomaly_mu = 19
-anomaly_sigma = 0.5
-anomaly_amplitude = A * 0.2
-anomaly_density = (anomaly_amplitude / (anomaly_sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - anomaly_mu) ** 2) / (2 * anomaly_sigma ** 2))
+# Типы аномалий и их параметры
+anomaly_types = ['poisson', 'pareto', 'exponential']
+anomaly_params = {
+    'poisson': {'sigma': 0.5, 'amplitude_factor': 0.3},  # Малый разброс, высокая амплитуда
+    'pareto': {'sigma': 1.5, 'amplitude_factor': 0.1},   # Средний разброс, средняя амплитуда
+    'exponential': {'sigma': 2.0, 'amplitude_factor': 0.05}  # Большой разброс, малая амплитуда
+}
 
-# Суммируем основную плотность и аномалию
-combined_density = main_density + anomaly_density
+# Генерация трех случайных точек для аномалий
+anomaly_mus = np.random.uniform(0, 24, 3)
 
-# Вычисляем кумулятивную функцию распределения (CDF)
+# Инициализация комбинированной плотности
+combined_density = main_density.copy()
+
+# Добавление трех аномалий
+for anomaly_mu in anomaly_mus:
+    if random.random() < 0.9:  # Вероятность 90% для добавления аномалии
+        anomaly_type = random.choice(anomaly_types)
+        params = anomaly_params[anomaly_type]
+        sigma_anomaly = params['sigma']
+        amplitude_anomaly = A * params['amplitude_factor']
+        anomaly_density = (amplitude_anomaly / (sigma_anomaly * np.sqrt(2 * np.pi))) * np.exp(-((hours - anomaly_mu) ** 2) / (2 * sigma_anomaly ** 2))
+        combined_density += anomaly_density
+
+# Вычисление кумулятивной функции распределения (CDF)
 cdf = np.cumsum(combined_density)
-cdf = cdf / cdf[-1]  # Нормируем, чтобы CDF[-1] = 1
+cdf = cdf / cdf[-1]  # Нормировка CDF
 
-# Генерируем времена отправки в часах (от 0 до 24)
+# Генерация времен отправки в часах (от 0 до 24)
 u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
 send_hours = np.interp(u, cdf, hours)
 
-# Масштабируем времена в секунды симуляции (24 часа → 30 минут)
-total_sim_seconds = 30 * 2  # 60 секунд
-scale_factor = total_sim_seconds / 24  # 75 секунд на час
+# Масштабирование времени в секунды симуляции (24 часа → 30 минут)
+total_sim_seconds = 30 * 60  # 30 минут в секундах
+scale_factor = total_sim_seconds / 24  # Секунды на час
 send_times = send_hours * scale_factor
 
-# Сортируем времена и вычисляем задержки
+# Сортировка времен и вычисление задержек
 send_times.sort()
 delays = np.diff(send_times, prepend=0)
 
-# Визуализация ожидаемого распределения
+# --- Визуализация ожидаемой нагрузки ---
 plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
-plt.title('Ожидаемое распределение нагрузки с аномалией в 19:00')
+plt.title('Ожидаемое распределение нагрузки с аномалиями')
 plt.xlabel('Часы суток')
 plt.ylabel('Плотность')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("combined_intensity_with_anomaly.png")
+plt.savefig("combined_intensity_with_anomalies.png")
 plt.show()
 
 # --- Отправка транзакций ---
@@ -265,18 +282,18 @@ print(f"Общее время симуляции: {total_simulation_time:.2f} с
 # --- Визуализация фактической и ожидаемой нагрузки ---
 actual_hours = send_times / total_sim_seconds * 24
 
-# Используем KDE для сглаживания фактического распределения
+# Использование KDE для сглаживания фактического распределения
 kde = gaussian_kde(actual_hours)
 x = np.linspace(0, 24, 1000)
 plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
-# plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
 plt.title("Сравнение ожидаемой и фактической нагрузки")
 plt.xlabel("Часы")
 plt.ylabel("Плотность")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("comparison_load_with_anomaly.png")
+plt.savefig("comparison_load_with_anomalies.png")
 plt.show()
 
 # --- Закрытие соединения ---
