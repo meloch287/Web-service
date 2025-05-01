@@ -117,7 +117,7 @@ ALTER TABLE "transactions"
 ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
-
+# Создание директории и подключение к базе данных
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
 conn.autocommit = True
@@ -186,19 +186,18 @@ for n in range(1, NUM_TRANSACTIONS + 1):
 
 print("Создание транзакций завершено.")
 
-# --- Генерация времени отправки с аномалиями ---
-
-A = 1.0
+# --- Параметры для генерации времени ---
+TOTAL_HOURS = 24
+A = NUM_TRANSACTIONS
 mu_main = 12.0
 sigma_main = 4.0
-
 hours = np.linspace(0, 24, NUM_TRANSACTIONS)
 
-# --- Основной трафик ---
+# Основной трафик
 base_traffic = (A / (sigma_main * np.sqrt(2 * np.pi))) * \
                np.exp(-((hours - mu_main)**2) / (2 * sigma_main**2))
 
-# --- Функции распределений аномалий ---
+# Функции распределений аномалий (без изменений)
 def normal_anomaly(hours, mu, sigma, amp):
     A_anom = A * amp
     return (A_anom / (sigma * np.sqrt(2 * np.pi))) * \
@@ -223,7 +222,7 @@ def pareto_anomaly(hours, mu, sigma, amp, alpha, t_min, t_max):
     pdf[mask] = B * norm * (hours[mask] - mu)**(-alpha - 1)
     return pdf
 
-# --- Параметры распределений ---
+# Параметры распределений (без изменений)
 anomaly_types = ['normal', 'exponential', 'poisson', 'pareto']
 anomaly_params = {
     'normal': {'sigma': 0.5, 'amp': 0.3},
@@ -232,129 +231,95 @@ anomaly_params = {
     'pareto': {'sigma': 1.5, 'amp': 0.1, 'alpha': 2.5, 't_min': 0.1, 't_max': 2.0}
 }
 
-# --- Генерация ожидаемой нагрузки ---
-expected = base_traffic.copy()
-planned_anomalies = []
-
+# Генерация комбинированной плотности с тремя случайными аномалиями
+combined_density = base_traffic.copy()
 for _ in range(3):
-    mu_anom = random.uniform(0, 24)
-    typ = random.choice(anomaly_types)
-    p = anomaly_params[typ]
-    planned_anomalies.append((typ, mu_anom))
-    if typ == 'normal':
-        expected += normal_anomaly(hours, mu_anom, p['sigma'], p['amp'])
-    elif typ == 'exponential':
-        expected += exponential_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
-    elif typ == 'poisson':
-        expected += poisson_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
-    elif typ == 'pareto':
-        expected += pareto_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['alpha'], p['t_min'], p['t_max'])
+    anomaly_time = np.random.uniform(0, 24)
+    anomaly_type = random.choice(anomaly_types)
+    if anomaly_type == 'normal':
+        anomaly_density = normal_anomaly(hours, anomaly_time, anomaly_params['normal']['sigma'], anomaly_params['normal']['amp'])
+    elif anomaly_type == 'exponential':
+        anomaly_density = exponential_anomaly(hours, anomaly_time, anomaly_params['exponential']['sigma'], anomaly_params['exponential']['amp'], anomaly_params['exponential']['lam'])
+    elif anomaly_type == 'poisson':
+        anomaly_density = poisson_anomaly(hours, anomaly_time, anomaly_params['poisson']['sigma'], anomaly_params['poisson']['amp'], anomaly_params['poisson']['lam'])
+    elif anomaly_type == 'pareto':
+        anomaly_density = pareto_anomaly(hours, anomaly_time, anomaly_params['pareto']['sigma'], anomaly_params['pareto']['amp'], anomaly_params['pareto']['alpha'], anomaly_params['pareto']['t_min'], anomaly_params['pareto']['t_max'])
+    combined_density += anomaly_density
 
-# --- Эмуляция отправки ---
-actual = base_traffic.copy()
-for typ, mu_anom in planned_anomalies:
-    if random.random() < 0.9:
-        p = anomaly_params[typ]
-        if typ == 'normal':
-            actual += normal_anomaly(hours, mu_anom, p['sigma'], p['amp'])
-        elif typ == 'exponential':
-            actual += exponential_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
-        elif typ == 'poisson':
-            actual += poisson_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
-        elif typ == 'pareto':
-            actual += pareto_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['alpha'], p['t_min'], p['t_max'])
+# Вычисление CDF
+cdf = np.cumsum(combined_density)
+cdf = cdf / cdf[-1]  # Нормировка
 
-# --- Визуализация ожидаемой нагрузки (перед отправкой) ---
-plt.figure(figsize=(10, 6))
-plt.plot(hours, expected / expected.sum() * 24, label='Ожидаемая нагрузка', color='blue')
+# Генерация времен отправки
+u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
+send_hours = np.interp(u, cdf, hours)
+
+# Масштабирование к 30 минутам (1800 секунд)
+total_sim_seconds = 30 * 60  # Исправлено с 30 * 2 на 30 * 60
+scale_factor = total_sim_seconds / 24
+send_times = send_hours * scale_factor
+
+# Сортировка и вычисление задержек
+send_times.sort()
+delays = np.diff(send_times, prepend=0)
+
+# Визуализация ожидаемой нагрузки
+plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
 plt.title('Ожидаемое распределение нагрузки с аномалиями')
 plt.xlabel('Часы суток')
 plt.ylabel('Плотность')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("expected_load.png")
-plt.show()  # Показываем график
-plt.close()
-
-# --- Генерация времени отправки ---
-combined_density = actual
-cdf = np.cumsum(combined_density)
-cdf = cdf / cdf[-1]
-
-u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
-send_hours = np.interp(u, cdf, hours)
-
-total_sim_seconds = 30 * 60
-scale_factor = total_sim_seconds / 24
-send_times = send_hours * scale_factor
-send_times.sort()
-delays = np.diff(send_times, prepend=0)
+plt.savefig("combined_intensity_with_anomaly.png")
+plt.show()
 
 # --- Отправка транзакций ---
 print("Начало отправки транзакций...")
 start_time = time.time()
 actual_timestamps = []
+for i, delay in enumerate(delays):
+    time.sleep(delay)
+    current_time = time.time() - start_time
+    actual_timestamps.append(current_time)
 
-for i, delay in enumerate(delays[:NUM_TRANSACTIONS]):
+    file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+
     try:
-        time.sleep(delay)
-        current_time = time.time() - start_time
-        actual_timestamps.append(current_time)
-
-        file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
-        if not os.path.exists(file_path):
-            print(f"[{i+1:06d}] Ошибка: Файл {file_path} не найден")
-            continue
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-
         resp = requests.post(
             SENDER_URL,
-            json=payload,
+            json={"data": payload["data"], "format": "json"},
             timeout=10
         )
         resp.raise_for_status()
         print(f"[{i+1:06d}] Отправлено → {resp.status_code}: {resp.json()}")
-    except FileNotFoundError:
-        print(f"[{i+1:06d}] Ошибка: Файл {file_path} не найден")
-    except json.JSONDecodeError:
-        print(f"[{i+1:06d}] Ошибка: Некорректный JSON в {file_path}")
-    except requests.RequestException as e:
-        print(f"[{i+1:06d}] Ошибка отправки: {e}")
     except Exception as e:
-        print(f"[{i+1:06d}] Неизвестная ошибка: {e}")
+        print(f"[{i+1:06d}] Ошибка отправки: {e}")
 
 end_time = time.time()
 print(f"Отправка завершена. Время выполнения: {end_time - start_time:.2f} секунд")
 
-# Проверка времени симуляции
-total_simulation_time = send_times[-1] if len(send_times) > 0 else 0
+# Проверка общего времени симуляции
+total_simulation_time = send_times[-1]
 print(f"Общее время симуляции: {total_simulation_time:.2f} секунд")
 
-# --- Визуализация фактической и ожидаемой нагрузки (после отправки) ---
-actual_hours = np.array(actual_timestamps) / total_sim_seconds * 24 if actual_timestamps else np.zeros(NUM_TRANSACTIONS)
-
-plt.figure(figsize=(10, 6))
-if len(actual_timestamps) > 1:
-    kde = gaussian_kde(actual_hours)
-    x = np.linspace(0, 24, 1000)
-    plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
-# plt.plot(hours, expected / expected.sum() * 24, label='Ожидаемая нагрузка', color='blue', alpha=0.5)
-# plt.title("Сравнение фактической и ожидаемой нагрузки")
-plt.xlabel("Часы суток")
+# --- Визуализация фактической и ожидаемой нагрузки ---
+actual_hours = np.array(actual_timestamps) / total_sim_seconds * 24
+kde = gaussian_kde(actual_hours)
+x = np.linspace(0, 24, 1000)
+plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
+# plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+# plt.title("Сравнение ожидаемой и фактической нагрузки")
+plt.xlabel("Часы")
 plt.ylabel("Плотность")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("comparison_load.png")
-plt.show()  # Показываем график
-plt.close()
+plt.savefig("comparison_load_with_anomaly.png")
+plt.show()
 
 # --- Закрытие соединения ---
-try:
-    cur.close()
-    conn.close()
-except Exception as e:
-    print(f"Ошибка при закрытии соединения: {e}")
+cur.close()
+conn.close()
