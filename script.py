@@ -187,115 +187,174 @@ for n in range(1, NUM_TRANSACTIONS + 1):
 print("Создание транзакций завершено.")
 
 # --- Генерация времени отправки с аномалиями ---
-TOTAL_HOURS = 24
-A = NUM_TRANSACTIONS  # Амплитуда основного распределения
-mu = 12              # Среднее основного распределения (полдень)
-sigma = 6            # Стандартное отклонение основного распределения
 
-# Основная плотность (нормальное распределение)
+A = 1.0
+mu_main = 12.0
+sigma_main = 4.0
+
 hours = np.linspace(0, 24, NUM_TRANSACTIONS)
-main_density = (A / (sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - mu) ** 2) / (2 * sigma ** 2))
 
-# Типы аномалий и их параметры
-anomaly_types = ['poisson', 'pareto', 'exponential']
+# --- Основной трафик ---
+base_traffic = (A / (sigma_main * np.sqrt(2 * np.pi))) * \
+               np.exp(-((hours - mu_main)**2) / (2 * sigma_main**2))
+
+# --- Функции распределений аномалий ---
+def normal_anomaly(hours, mu, sigma, amp):
+    A_anom = A * amp
+    return (A_anom / (sigma * np.sqrt(2 * np.pi))) * \
+           np.exp(-((hours - mu)**2) / (2 * sigma**2))
+
+def exponential_anomaly(hours, mu, sigma, amp, lam):
+    A_anom = A * amp
+    exp_part = lam * np.exp(-lam * (hours - mu))
+    exp_part[hours < mu] = 0
+    return exp_part * A_anom
+
+def poisson_anomaly(hours, mu, sigma, amp, lam):
+    A_anom = A * amp
+    return (A_anom / (sigma * np.sqrt(2 * np.pi))) * \
+           np.exp(-((hours - mu)**2)/(2 * sigma**2)) + lam
+
+def pareto_anomaly(hours, mu, sigma, amp, alpha, t_min, t_max):
+    B = A * amp
+    norm = (alpha * t_min**alpha) / (1 - (t_min/t_max)**alpha)
+    pdf = np.zeros_like(hours)
+    mask = (hours >= t_min + mu) & (hours <= t_max + mu)
+    pdf[mask] = B * norm * (hours[mask] - mu)**(-alpha - 1)
+    return pdf
+
+# --- Параметры распределений ---
+anomaly_types = ['normal', 'exponential', 'poisson', 'pareto']
 anomaly_params = {
-    'poisson': {'sigma': 0.5, 'amplitude_factor': 0.3},  # Малый разброс, высокая амплитуда
-    'pareto': {'sigma': 1.5, 'amplitude_factor': 0.1},   # Средний разброс, средняя амплитуда
-    'exponential': {'sigma': 2.0, 'amplitude_factor': 0.05}  # Большой разброс, малая амплитуда
+    'normal': {'sigma': 0.5, 'amp': 0.3},
+    'exponential': {'sigma': 2.0, 'amp': 0.05, 'lam': 1/3},
+    'poisson': {'sigma': 0.5, 'amp': 0.3, 'lam': 5},
+    'pareto': {'sigma': 1.5, 'amp': 0.1, 'alpha': 2.5, 't_min': 0.1, 't_max': 2.0}
 }
 
-# Генерация трех случайных точек для аномалий
-anomaly_mus = np.random.uniform(0, 24, 3)
+# --- Генерация ожидаемой нагрузки ---
+expected = base_traffic.copy()
+planned_anomalies = []
 
-# Инициализация комбинированной плотности
-combined_density = main_density.copy()
+for _ in range(3):
+    mu_anom = random.uniform(0, 24)
+    typ = random.choice(anomaly_types)
+    p = anomaly_params[typ]
+    planned_anomalies.append((typ, mu_anom))
+    if typ == 'normal':
+        expected += normal_anomaly(hours, mu_anom, p['sigma'], p['amp'])
+    elif typ == 'exponential':
+        expected += exponential_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
+    elif typ == 'poisson':
+        expected += poisson_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
+    elif typ == 'pareto':
+        expected += pareto_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['alpha'], p['t_min'], p['t_max'])
 
-# Добавление трех аномалий
-for anomaly_mu in anomaly_mus:
-    if random.random() < 0.9:  # Вероятность 90% для добавления аномалии
-        anomaly_type = random.choice(anomaly_types)
-        params = anomaly_params[anomaly_type]
-        sigma_anomaly = params['sigma']
-        amplitude_anomaly = A * params['amplitude_factor']
-        anomaly_density = (amplitude_anomaly / (sigma_anomaly * np.sqrt(2 * np.pi))) * np.exp(-((hours - anomaly_mu) ** 2) / (2 * sigma_anomaly ** 2))
-        combined_density += anomaly_density
+# --- Эмуляция отправки ---
+actual = base_traffic.copy()
+for typ, mu_anom in planned_anomalies:
+    if random.random() < 0.9:
+        p = anomaly_params[typ]
+        if typ == 'normal':
+            actual += normal_anomaly(hours, mu_anom, p['sigma'], p['amp'])
+        elif typ == 'exponential':
+            actual += exponential_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
+        elif typ == 'poisson':
+            actual += poisson_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['lam'])
+        elif typ == 'pareto':
+            actual += pareto_anomaly(hours, mu_anom, p['sigma'], p['amp'], p['alpha'], p['t_min'], p['t_max'])
 
-# Вычисление кумулятивной функции распределения (CDF)
-cdf = np.cumsum(combined_density)
-cdf = cdf / cdf[-1]  # Нормировка CDF
-
-# Генерация времен отправки в часах (от 0 до 24)
-u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
-send_hours = np.interp(u, cdf, hours)
-
-# Масштабирование времени в секунды симуляции (24 часа → 30 минут)
-total_sim_seconds = 30 * 60  # 30 минут в секундах
-scale_factor = total_sim_seconds / 24  # Секунды на час
-send_times = send_hours * scale_factor
-
-# Сортировка времен и вычисление задержек
-send_times.sort()
-delays = np.diff(send_times, prepend=0)
-
-# --- Визуализация ожидаемой нагрузки ---
-plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+# --- Визуализация ожидаемой нагрузки (перед отправкой) ---
+plt.figure(figsize=(10, 6))
+plt.plot(hours, expected / expected.sum() * 24, label='Ожидаемая нагрузка', color='blue')
 plt.title('Ожидаемое распределение нагрузки с аномалиями')
 plt.xlabel('Часы суток')
 plt.ylabel('Плотность')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("combined_intensity_with_anomalies.png")
-plt.show()
+plt.savefig("expected_load.png")
+plt.show()  # Показываем график
+plt.close()
+
+# --- Генерация времени отправки ---
+combined_density = actual
+cdf = np.cumsum(combined_density)
+cdf = cdf / cdf[-1]
+
+u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
+send_hours = np.interp(u, cdf, hours)
+
+total_sim_seconds = 30 * 60
+scale_factor = total_sim_seconds / 24
+send_times = send_hours * scale_factor
+send_times.sort()
+delays = np.diff(send_times, prepend=0)
 
 # --- Отправка транзакций ---
 print("Начало отправки транзакций...")
 start_time = time.time()
 actual_timestamps = []
-for i, delay in enumerate(delays):
-    time.sleep(delay)
-    current_time = time.time() - start_time
-    actual_timestamps.append(current_time)
 
-    file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
-    with open(file_path, 'r', encoding='utf-8') as f:
-        payload = json.load(f)
-
+for i, delay in enumerate(delays[:NUM_TRANSACTIONS]):
     try:
+        time.sleep(delay)
+        current_time = time.time() - start_time
+        actual_timestamps.append(current_time)
+
+        file_path = os.path.join(OUTPUT_DIR, f"txn_{i+1:06d}.json")
+        if not os.path.exists(file_path):
+            print(f"[{i+1:06d}] Ошибка: Файл {file_path} не найден")
+            continue
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+
         resp = requests.post(
             SENDER_URL,
-            json={"data": payload["data"], "format": "json"},
+            json=payload,
             timeout=10
         )
         resp.raise_for_status()
         print(f"[{i+1:06d}] Отправлено → {resp.status_code}: {resp.json()}")
-    except Exception as e:
+    except FileNotFoundError:
+        print(f"[{i+1:06d}] Ошибка: Файл {file_path} не найден")
+    except json.JSONDecodeError:
+        print(f"[{i+1:06d}] Ошибка: Некорректный JSON в {file_path}")
+    except requests.RequestException as e:
         print(f"[{i+1:06d}] Ошибка отправки: {e}")
+    except Exception as e:
+        print(f"[{i+1:06d}] Неизвестная ошибка: {e}")
 
 end_time = time.time()
 print(f"Отправка завершена. Время выполнения: {end_time - start_time:.2f} секунд")
 
-# Проверка общего времени симуляции
-total_simulation_time = send_times[-1]
+# Проверка времени симуляции
+total_simulation_time = send_times[-1] if len(send_times) > 0 else 0
 print(f"Общее время симуляции: {total_simulation_time:.2f} секунд")
 
-# --- Визуализация фактической и ожидаемой нагрузки ---
-actual_hours = send_times / total_sim_seconds * 24
+# --- Визуализация фактической и ожидаемой нагрузки (после отправки) ---
+actual_hours = np.array(actual_timestamps) / total_sim_seconds * 24 if actual_timestamps else np.zeros(NUM_TRANSACTIONS)
 
-# Использование KDE для сглаживания фактического распределения
-kde = gaussian_kde(actual_hours)
-x = np.linspace(0, 24, 1000)
-plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
-# plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
-plt.title("фактическая нагрузка")
-plt.xlabel("Часы")
+plt.figure(figsize=(10, 6))
+if len(actual_timestamps) > 1:
+    kde = gaussian_kde(actual_hours)
+    x = np.linspace(0, 24, 1000)
+    plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
+# plt.plot(hours, expected / expected.sum() * 24, label='Ожидаемая нагрузка', color='blue', alpha=0.5)
+# plt.title("Сравнение фактической и ожидаемой нагрузки")
+plt.xlabel("Часы суток")
 plt.ylabel("Плотность")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("comparison_load_with_anomalies.png")
-plt.show()
+plt.savefig("comparison_load.png")
+plt.show()  # Показываем график
+plt.close()
 
 # --- Закрытие соединения ---
-cur.close()
-conn.close()
+try:
+    cur.close()
+    conn.close()
+except Exception as e:
+    print(f"Ошибка при закрытии соединения: {e}")
