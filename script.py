@@ -117,6 +117,7 @@ ALTER TABLE "transactions"
 ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
+# Создание директории и подключение к базе данных
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
 conn.autocommit = True
@@ -185,44 +186,83 @@ for n in range(1, NUM_TRANSACTIONS + 1):
 
 print("Создание транзакций завершено.")
 
+# --- Параметры для генерации времени ---
 TOTAL_HOURS = 24
 A = NUM_TRANSACTIONS
-mu = 12
-sigma = 6
-
-# Основная плотность (нормальное распределение)
+mu_main = 12.0
+sigma_main = 4.0
 hours = np.linspace(0, 24, NUM_TRANSACTIONS)
-main_density = (A / (sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - mu) ** 2) / (2 * sigma ** 2))
 
-# Аномалия: всплеск в 19:00
-anomaly_mu = 19
-anomaly_sigma = 0.5
-anomaly_amplitude = A * 0.2
-anomaly_density = (anomaly_amplitude / (anomaly_sigma * np.sqrt(2 * np.pi))) * np.exp(-((hours - anomaly_mu) ** 2) / (2 * anomaly_sigma ** 2))
+# Основной трафик
+base_traffic = (A / (sigma_main * np.sqrt(2 * np.pi))) * \
+               np.exp(-((hours - mu_main)**2) / (2 * sigma_main**2))
 
-# Суммируем основную плотность и аномалию
-combined_density = main_density + anomaly_density
+# Функции распределений аномалий (без изменений)
+def normal_anomaly(hours, mu, sigma, amp):
+    A_anom = A * amp
+    return (A_anom / (sigma * np.sqrt(2 * np.pi))) * \
+           np.exp(-((hours - mu)**2) / (2 * sigma**2))
 
-# Вычисляем кумулятивную функцию распределения (CDF)
+def exponential_anomaly(hours, mu, sigma, amp, lam):
+    A_anom = A * amp
+    exp_part = lam * np.exp(-lam * (hours - mu))
+    exp_part[hours < mu] = 0
+    return exp_part * A_anom
+
+def poisson_anomaly(hours, mu, sigma, amp, lam):
+    A_anom = A * amp
+    return (A_anom / (sigma * np.sqrt(2 * np.pi))) * \
+           np.exp(-((hours - mu)**2)/(2 * sigma**2)) + lam
+
+def pareto_anomaly(hours, mu, sigma, amp, alpha, t_min, t_max):
+    B = A * amp
+    norm = (alpha * t_min**alpha) / (1 - (t_min/t_max)**alpha)
+    pdf = np.zeros_like(hours)
+    mask = (hours >= t_min + mu) & (hours <= t_max + mu)
+    pdf[mask] = B * norm * (hours[mask] - mu)**(-alpha - 1)
+    return pdf
+
+# Параметры распределений (без изменений)
+anomaly_types = ['normal', 'exponential', 'poisson', 'pareto']
+anomaly_params = {
+    'normal': {'sigma': 2.0, 'amp': 0.3},  
+    'exponential': {'sigma': 2.0, 'amp': 0.05, 'lam': 1/3},
+    'poisson': {'sigma': 2.0, 'amp': 0.3, 'lam': 5},  
+    'pareto': {'sigma': 2.5, 'amp': 0.1, 'alpha': 2.5, 't_min': 0.1, 't_max': 2.0}
+}
+
+# Генерация комбинированной плотности с тремя случайными аномалиями
+combined_density = base_traffic.copy()
+for _ in range(3):
+    anomaly_time = np.random.uniform(0, 24)
+    anomaly_type = random.choice(anomaly_types)
+    if anomaly_type == 'normal':
+        anomaly_density = normal_anomaly(hours, anomaly_time, anomaly_params['normal']['sigma'], anomaly_params['normal']['amp'])
+    elif anomaly_type == 'exponential':
+        anomaly_density = exponential_anomaly(hours, anomaly_time, anomaly_params['exponential']['sigma'], anomaly_params['exponential']['amp'], anomaly_params['exponential']['lam'])
+    elif anomaly_type == 'poisson':
+        anomaly_density = poisson_anomaly(hours, anomaly_time, anomaly_params['poisson']['sigma'], anomaly_params['poisson']['amp'], anomaly_params['poisson']['lam'])
+    elif anomaly_type == 'pareto':
+        anomaly_density = pareto_anomaly(hours, anomaly_time, anomaly_params['pareto']['sigma'], anomaly_params['pareto']['amp'], anomaly_params['pareto']['alpha'], anomaly_params['pareto']['t_min'], anomaly_params['pareto']['t_max'])
+    combined_density += anomaly_density
+
 cdf = np.cumsum(combined_density)
-cdf = cdf / cdf[-1]  # Нормируем, чтобы CDF[-1] = 1
-
-# Генерируем времена отправки в часах (от 0 до 24)
+cdf = cdf / cdf[-1]  # Нормировка
 u = np.random.uniform(0, 1, NUM_TRANSACTIONS)
 send_hours = np.interp(u, cdf, hours)
 
-# Масштабируем времена в секунды симуляции (24 часа → 30 минут)
-total_sim_seconds = 30 * 2  # 60 секунд
-scale_factor = total_sim_seconds / 24  # 75 секунд на час
+# Масштабирование к 30 минутам (1800 секунд)
+total_sim_seconds = 30 * 2
+scale_factor = total_sim_seconds / 24
 send_times = send_hours * scale_factor
 
-# Сортируем времена и вычисляем задержки
+# Сортировка и вычисление задержек
 send_times.sort()
 delays = np.diff(send_times, prepend=0)
 
-# Визуализация ожидаемого распределения
+# Визуализация ожидаемой нагрузки
 plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
-plt.title('Ожидаемое распределение нагрузки с аномалией в 19:00')
+plt.title('Ожидаемое распределение нагрузки с аномалиями')
 plt.xlabel('Часы суток')
 plt.ylabel('Плотность')
 plt.legend()
@@ -263,13 +303,17 @@ total_simulation_time = send_times[-1]
 print(f"Общее время симуляции: {total_simulation_time:.2f} секунд")
 
 # --- Визуализация фактической и ожидаемой нагрузки ---
-actual_hours = send_times / total_sim_seconds * 24
+actual_hours = send_times / total_sim_seconds * 24  # Используем send_times вместо actual_timestamps
 
-# Используем KDE для сглаживания фактического распределения
-kde = gaussian_kde(actual_hours)
-x = np.linspace(0, 24, 1000)
-plt.plot(x, kde(x), label='Фактическая нагрузка (KDE)', color='green')
-# plt.plot(hours, combined_density / combined_density.sum() * 24, label='Ожидаемая нагрузка')
+# Нормализация ожидаемой нагрузки
+combined_density_normalized = combined_density / np.trapz(combined_density, hours)
+
+# Создание гистограммы для фактической нагрузки
+plt.hist(actual_hours, bins=50, density=True, alpha=0.7, label='Фактическая нагрузка (гистограмма)', color='green')
+
+# Наложение ожидаемой нагрузки
+plt.plot(hours, combined_density_normalized, label='Ожидаемая нагрузка', color='blue')
+
 plt.title("Сравнение ожидаемой и фактической нагрузки")
 plt.xlabel("Часы")
 plt.ylabel("Плотность")
