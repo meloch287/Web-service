@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS "users" (
     "bic" TEXT
 );
 
+CREATE TABLE IF NOT EXISTS response_log (
+    id BIGSERIAL PRIMARY KEY,
+    status_code INTEGER NOT NULL,
+    response_body TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 ALTER TABLE "transactions"
 ADD FOREIGN KEY("src_id") REFERENCES "clients"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
