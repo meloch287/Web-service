@@ -10,11 +10,11 @@ from datetime import datetime
 logging.basicConfig(filename="receiver.log", level=logging.INFO, format="%(asctime)s - %(message)s")
 
 # Данные для подключения к PostgreSQL
-DB_USER = "postgres"
-DB_PASSWORD = "123"
+DB_USER = "vtsk"
+DB_PASSWORD = "1234"
 DB_HOST = "localhost"
 DB_PORT = "5432"
-DB_NAME = "receiver_db"
+DB_NAME = "vtsk_db"
 
 # def create_database():
 #     """
