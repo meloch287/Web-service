@@ -1,56 +1,26 @@
 import psycopg2
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
 import requests
 import json
 import logging
+import traceback
 from dicttoxml import dicttoxml
+import time
+import os
+from datetime import datetime
 
-# Настройка логирования в файл sender.log
-logging.basicConfig(filename="sender.log", level=logging.INFO, format="%(asctime)s - %(message)s")
+# Настройка расширенного логирования в файл sender.log
+log_dir = os.path.dirname(os.path.abspath(__file__))
+log_file = os.path.join(log_dir, "sender.log")
 
-# Данные для подключения к PostgreSQL
-DB_USER = "vtsk"
-DB_PASSWORD = "1234"
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "vtsk_db"
+logging.basicConfig(
+    filename=log_file, 
+    level=logging.INFO, 
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
-def create_database():
-    """
-    Создает базу данных PostgreSQL, если она ещё не существует.
-    Используется соединение к системной базе postgres.
-    """
-    conn = psycopg2.connect(dbname="postgres", user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-    conn.autocommit = True
-    cursor = conn.cursor()
-    cursor.execute(f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'")
-    if not cursor.fetchone():
-        cursor.execute(f"CREATE DATABASE {DB_NAME}")
-    cursor.close()
-    conn.close()
-
-# Проверка и создание базы данных при запуске
-create_database()
-
-# Настройка Flask-приложения и SQLAlchemy
+# Настройка Flask-приложения
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-db = SQLAlchemy(app)
-
-class ResponseLog(db.Model):
-    """
-    SQLAlchemy модель для логирования ответов от сервера-получателя.
-    """
-    id = db.Column(db.Integer, primary_key=True)
-    status_code = db.Column(db.Integer, nullable=False)
-    response_body = db.Column(db.Text)
-
-# Создание таблиц в БД, если они ещё не созданы
-with app.app_context():
-    db.create_all()
 
 @app.route('/', methods=['GET'])
 def home():
@@ -58,6 +28,119 @@ def home():
     Стартовая страница сервиса. Используется для проверки, работает ли сервер.
     """
     return jsonify({'status': 'Sender service is running'}), 200
+
+def extract_trn_id(data_field):
+    """
+    Извлекает TrnId из структуры данных.
+    
+    Args:
+        data_field: Список или словарь с данными
+        
+    Returns:
+        str: TrnId или None, если не найден
+    """
+    try:
+        if isinstance(data_field, list):
+            for item in data_field:
+                if isinstance(item, dict) and 'Data' in item:
+                    return item['Data'].get('TrnId')
+        elif isinstance(data_field, dict) and 'Data' in data_field:
+            return data_field['Data'].get('TrnId')
+    except Exception as e:
+        logging.error(f"Ошибка при извлечении TrnId: {str(e)}")
+    return None
+
+def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
+    """
+    Отправляет данные на сервер-получатель с поддержкой повторных попыток.
+    
+    Args:
+        payload: Данные для отправки
+        fmt: Формат данных ('json' или 'xml')
+        max_retries: Максимальное количество попыток
+        retry_delay: Задержка между попытками в секундах
+        
+    Returns:
+        tuple: (успех, ответ, код_ответа)
+    """
+    headers = {}
+    data_to_send = None
+    
+    # Подготовка тела запроса и заголовков
+    if fmt == 'json':
+        headers['Content-Type'] = 'application/json'
+        data_to_send = payload
+    elif fmt == 'xml':
+        headers['Content-Type'] = 'application/xml'
+        data_to_send = dicttoxml(payload, custom_root='root', attr_type=False).decode()
+    else:
+        logging.error(f"Неподдерживаемый формат: {fmt}")
+        return False, {"error": "Unsupported format"}, 400
+    
+    # URL сервиса-получателя
+    receiver_url = 'http://192.168.10.2:5001/receive'
+    
+    # Извлекаем TrnId для логирования
+    data_field = payload.get('data')
+    trn_id = extract_trn_id(data_field)
+    
+    # Логирование отправляемых данных
+    log_msg = f"Отправка данных: TrnId={trn_id}, Format={fmt}"
+    logging.info(log_msg)
+    print(log_msg)
+    
+    # Попытки отправки с повторами при ошибках
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(
+                receiver_url, 
+                data=data_to_send if fmt == 'xml' else json.dumps(data_to_send), 
+                headers=headers,
+                timeout=15  # Увеличенный таймаут
+            )
+            
+            # Проверяем успешность ответа
+            if resp.status_code < 400:
+                log_msg = f"Успешная отправка (попытка {attempt}): TrnId={trn_id}, Status={resp.status_code}"
+                logging.info(log_msg)
+                print(log_msg)
+                
+                try:
+                    receiver_response = resp.json()
+                except Exception:
+                    receiver_response = resp.text
+                
+                # Логируем ответ в файл вместо БД
+                response_log = {
+                    "timestamp": datetime.now().isoformat(),
+                    "trn_id": trn_id,
+                    "status_code": resp.status_code,
+                    "response": receiver_response,
+                    "attempt": attempt
+                }
+                logging.info(f"Response log: {json.dumps(response_log)}")
+                
+                return True, receiver_response, resp.status_code
+            else:
+                log_msg = f"Ошибка отправки (попытка {attempt}): TrnId={trn_id}, Status={resp.status_code}, Response={resp.text}"
+                logging.error(log_msg)
+                print(log_msg)
+                
+                # Если это не последняя попытка, ждем перед повторной отправкой
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+        except Exception as e:
+            log_msg = f"Исключение при отправке (попытка {attempt}): TrnId={trn_id}, Error={str(e)}"
+            logging.error(log_msg)
+            logging.error(traceback.format_exc())
+            print(log_msg)
+            
+            # Если это не последняя попытка, ждем перед повторной отправкой
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+    
+    # Если все попытки неудачны
+    return False, {"error": "Failed after max retries"}, 500
 
 @app.route('/send', methods=['POST'])
 def send_message():
@@ -69,6 +152,7 @@ def send_message():
     try:
         content = request.get_json()
         if content is None:
+            logging.error("Получен невалидный JSON")
             return jsonify({'error': 'Invalid JSON payload'}), 400
 
         # Извлекаем данные и формат (json или xml)
@@ -76,55 +160,39 @@ def send_message():
         fmt = content.get('format', 'json').lower()
 
         if data_field is None:
+            logging.error("Поле 'data' не предоставлено")
             return jsonify({'error': 'Поле "data" не предоставлено'}), 400
 
-        headers = {}
-        payload = None
+        # Извлекаем TrnId для логирования
+        trn_id = extract_trn_id(data_field)
+        logging.info(f"Получен запрос на отправку: TrnId={trn_id}, Format={fmt}")
 
-        # Подготовка тела запроса и заголовков
-        if fmt == 'json':
-            headers['Content-Type'] = 'application/json'
-            payload = json.dumps({"data": data_field})
-        elif fmt == 'xml':
-            headers['Content-Type'] = 'application/xml'
-            payload = dicttoxml({"data": data_field}, custom_root='root', attr_type=False).decode()
+        # Отправка данных на сервер-получатель
+        success, receiver_response, status_code = send_to_receiver(content, fmt)
+
+        # Проверяем успешность отправки
+        if success:
+            return jsonify({
+                'sent': True,
+                'receiver_status': status_code,
+                'receiver_response': receiver_response
+            }), 200
         else:
-            return jsonify({'error': 'Unsupported format. Choose json or xml'}), 400
-
-        # URL сервиса-получателя (можно изменить при необходимости)
-        receiver_url = 'http://192.168.10.2:5001/receive'
-
-        # Отправка данных
-        resp = requests.post(receiver_url, data=payload, headers=headers)
-
-        log_msg = f"Sent data: {json.dumps(data_field, ensure_ascii=False)}, Format: {fmt}, Response: {resp.status_code} - {resp.text}"
-        logging.info(log_msg)
-        print(log_msg)
-
-        # Логирование ответа в БД
-        log_entry = ResponseLog(status_code=resp.status_code, response_body=resp.text)
-        db.session.add(log_entry)
-        db.session.commit()
-
-        try:
-            receiver_response = resp.json()
-        except Exception:
-            receiver_response = resp.text
-
-        return jsonify({
-            'sent': True,
-            'receiver_status': resp.status_code,
-            'receiver_response': receiver_response
-        }), resp.status_code
+            return jsonify({
+                'sent': False,
+                'error': 'Failed to send to receiver',
+                'receiver_response': receiver_response
+            }), 500
 
     except Exception as e:
         # Обработка ошибок отправки
-        db.session.rollback()
         error_msg = f"Error sending message: {str(e)}"
         logging.error(error_msg)
+        logging.error(traceback.format_exc())
         print(error_msg)
         return jsonify({'error': error_msg}), 400
 
 if __name__ == '__main__':
     print("Sender service starting...")
+    logging.info("Sender service starting...")
     app.run(host='0.0.0.0', port=5000, debug=True)
