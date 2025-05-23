@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 from copy import deepcopy
 from psycopg2.extras import execute_values
@@ -230,7 +230,7 @@ def generate_transactions(users: list, num_transactions: int, send_hours: list, 
 
             transaction_data.append((
                 payer['db_id'], beneficiary['db_id'], type_id, bank_id, bank_id, status_id,
-                amount, datetime.utcnow(), narrative, is_bad, 1
+                amount, datetime.now(timezone.utc), narrative, is_bad, 1
             ))
 
             if n % 1000 == 0:
