@@ -1,0 +1,27 @@
+Python
+
+*.pyc pycache/ *.pyo *.pyd .Python env/ venv/ ENV/ env.bak/ venv.bak/
+
+Logs
+
+*.log
+
+Generated files
+
+generated_transactions/ *.png
+
+IDE and editor files
+
+.vscode/ .idea/ *.sublime-project *.sublime-workspace
+
+Database
+
+*.sqlite3 *.db
+
+OS generated files
+
+.DS_Store Thumbs.db
+
+Other
+
+*.bak *.swp *~
