@@ -87,3 +87,23 @@
    python main.py
    ```
    Клиент отправит тестовые данные в `sender.py`, после чего увидите ответ сервиса и содержимое баз данных.
+
+
+# Архитектура проекта
+
+```
+Web-service-main/
+├── scripts/
+│   ├── db_config.py
+│   ├── validation.py
+│   ├── user_generator.py
+│   ├── transaction_generator.py
+│   ├── transaction_sender.py
+│   ├── visualization.py
+│   ├── main.py
+│   ├── payload_template.json
+├── .gitignore
+├── receiver.py
+├── sender.py
+├── requirements.txt
+```
