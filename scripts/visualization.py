@@ -23,6 +23,7 @@ def plot_expected_load(hours: np.ndarray, combined_density: np.ndarray, anomaly_
         plt.grid(True)
         plt.tight_layout()
         plt.savefig("combined_intensity_with_anomaly.png")
+        plt.show()
         logging.info("График распределения нагрузки сохранен")
     except Exception as e:
         logging.error(f"Ошибка при визуализации нагрузки: {str(e)}")
@@ -50,6 +51,7 @@ def plot_actual_load(send_times: np.ndarray, total_sim_seconds: float, bad_trans
         plt.grid(True)
         plt.tight_layout()
         plt.savefig("transaction_distribution.png")
+        plt.show()
         logging.info("График распределения транзакций сохранен")
     except Exception as e:
         logging.error(f"Ошибка при визуализации распределения транзакций: {str(e)}")
