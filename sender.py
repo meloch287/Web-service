@@ -7,9 +7,8 @@ import traceback
 from dicttoxml import dicttoxml
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
-# Настройка расширенного логирования в файл sender.log
 log_dir = os.path.dirname(os.path.abspath(__file__))
 log_file = os.path.join(log_dir, "sender.log")
 
@@ -19,7 +18,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Настройка Flask-приложения
 app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
@@ -66,7 +64,6 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
     headers = {}
     data_to_send = None
     
-    # Подготовка тела запроса и заголовков
     if fmt == 'json':
         headers['Content-Type'] = 'application/json'
         data_to_send = payload
@@ -77,29 +74,24 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
         logging.error(f"Неподдерживаемый формат: {fmt}")
         return False, {"error": "Unsupported format"}, 400
     
-    # URL сервиса-получателя
-    receiver_url = 'http://192.168.10.2:5001/receive'
-    
-    # Извлекаем TrnId для логирования
+    receiver_url = 'http://localhost:5001/receive' #http://192.168.10.2:5001/receive
+
     data_field = payload.get('data')
     trn_id = extract_trn_id(data_field)
     
-    # Логирование отправляемых данных
     log_msg = f"Отправка данных: TrnId={trn_id}, Format={fmt}"
     logging.info(log_msg)
     print(log_msg)
     
-    # Попытки отправки с повторами при ошибках
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.post(
                 receiver_url, 
                 data=data_to_send if fmt == 'xml' else json.dumps(data_to_send), 
                 headers=headers,
-                timeout=15  # Увеличенный таймаут
+                timeout=15  
             )
             
-            # Проверяем успешность ответа
             if resp.status_code < 400:
                 log_msg = f"Успешная отправка (попытка {attempt}): TrnId={trn_id}, Status={resp.status_code}"
                 logging.info(log_msg)
@@ -110,9 +102,8 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
                 except Exception:
                     receiver_response = resp.text
                 
-                # Логируем ответ в файл вместо БД
                 response_log = {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "trn_id": trn_id,
                     "status_code": resp.status_code,
                     "response": receiver_response,
@@ -126,7 +117,6 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
                 logging.error(log_msg)
                 print(log_msg)
                 
-                # Если это не последняя попытка, ждем перед повторной отправкой
                 if attempt < max_retries:
                     time.sleep(retry_delay)
         except Exception as e:
@@ -135,11 +125,9 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
             logging.error(traceback.format_exc())
             print(log_msg)
             
-            # Если это не последняя попытка, ждем перед повторной отправкой
             if attempt < max_retries:
                 time.sleep(retry_delay)
     
-    # Если все попытки неудачны
     return False, {"error": "Failed after max retries"}, 500
 
 @app.route('/send', methods=['POST'])
@@ -155,7 +143,6 @@ def send_message():
             logging.error("Получен невалидный JSON")
             return jsonify({'error': 'Invalid JSON payload'}), 400
 
-        # Извлекаем данные и формат (json или xml)
         data_field = content.get('data')
         fmt = content.get('format', 'json').lower()
 
@@ -163,14 +150,11 @@ def send_message():
             logging.error("Поле 'data' не предоставлено")
             return jsonify({'error': 'Поле "data" не предоставлено'}), 400
 
-        # Извлекаем TrnId для логирования
         trn_id = extract_trn_id(data_field)
         logging.info(f"Получен запрос на отправку: TrnId={trn_id}, Format={fmt}")
 
-        # Отправка данных на сервер-получатель
         success, receiver_response, status_code = send_to_receiver(content, fmt)
 
-        # Проверяем успешность отправки
         if success:
             return jsonify({
                 'sent': True,
@@ -185,7 +169,6 @@ def send_message():
             }), 500
 
     except Exception as e:
-        # Обработка ошибок отправки
         error_msg = f"Error sending message: {str(e)}"
         logging.error(error_msg)
         logging.error(traceback.format_exc())
