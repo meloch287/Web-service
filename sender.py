@@ -74,7 +74,7 @@ def send_to_receiver(payload, fmt, max_retries=3, retry_delay=1):
         logging.error(f"Неподдерживаемый формат: {fmt}")
         return False, {"error": "Unsupported format"}, 400
     
-    receiver_url = 'http://localhost:5001/receive' #http://192.168.10.2:5001/receive
+    receiver_url =  'http://192.168.10.2:5001/receive' #'http://localhost:5001/receive'
 
     data_field = payload.get('data')
     trn_id = extract_trn_id(data_field)
