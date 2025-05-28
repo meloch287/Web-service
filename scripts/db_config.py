@@ -3,25 +3,22 @@ from psycopg2.pool import SimpleConnectionPool
 import logging
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-# Настройка логирования
 logging.basicConfig(
     filename="script.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Настройки базы данных
 DB_USER = "vtsk"
 DB_PASSWORD = "1234"
 DB_HOST = "localhost"
 DB_PORT = "5432"
 DB_NAME = "vtsk_db"
 
-# SQL схема
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS "transactions" (
     "id" BIGSERIAL NOT NULL UNIQUE,
-    "src_id" BIGINT,
+    "client_id" BIGINT,
     "dst_id" BIGINT,
     "value" NUMERIC,
     "type_id" BIGINT,
@@ -30,7 +27,7 @@ CREATE TABLE IF NOT EXISTS "transactions" (
     "timestamp" TIMESTAMP,
     "comment" TEXT,
     "status_id" BIGINT,
-    "is_bad" BOOLEAN DEFAULT FALSE,
+    "is_bad" INTEGER DEFAULT 0,
     "epoch_number" BIGINT DEFAULT 1,
     PRIMARY KEY("id")
 );
@@ -78,7 +75,7 @@ CREATE TABLE IF NOT EXISTS "users" (
 );
 
 ALTER TABLE "transactions"
-ADD FOREIGN KEY("src_id") REFERENCES "clients"("id")
+ADD FOREIGN KEY("client_id") REFERENCES "clients"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 
 ALTER TABLE "transactions"
@@ -106,7 +103,32 @@ ADD FOREIGN KEY("status_id") REFERENCES "transaction_status"("id")
 ON UPDATE NO ACTION ON DELETE NO ACTION;
 """
 
-# Пул соединений с базой данных
+# SQL для переименования колонки src_id в client_id, если она существует
+RENAME_SRC_ID_SQL = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name = 'transactions' AND column_name = 'src_id'
+    ) THEN
+        ALTER TABLE "transactions" RENAME COLUMN "src_id" TO "client_id";
+        
+        -- Пересоздаем внешний ключ с новым именем колонки
+        ALTER TABLE "transactions" DROP CONSTRAINT IF EXISTS "transactions_src_id_fkey";
+        ALTER TABLE "transactions"
+        ADD CONSTRAINT "transactions_client_id_fkey"
+        FOREIGN KEY("client_id") REFERENCES "clients"("id")
+        ON UPDATE NO ACTION ON DELETE NO ACTION;
+        
+        RAISE NOTICE 'Колонка src_id переименована в client_id';
+    ELSE
+        RAISE NOTICE 'Колонка src_id не найдена или уже переименована';
+    END IF;
+END
+$$;
+"""
+
 db_pool = SimpleConnectionPool(1, 20, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
 
 def get_db_connection():
@@ -137,7 +159,12 @@ def initialize_db():
     try:
         conn = connect_to_db()
         with conn.cursor() as cur:
+            # Переименовываем колонку src_id в client_id, если она существует
+            cur.execute(RENAME_SRC_ID_SQL)
+            
+            # Создаем/обновляем схему БД
             cur.execute(SCHEMA_SQL)
+            
         logging.info("Схема БД создана/обновлена")
     except psycopg2.OperationalError as e:
         logging.error(f"Ошибка подключения к БД: {str(e)}")
