@@ -71,12 +71,15 @@ def send_transactions_parallel(payloads: list, max_workers: int = 10) -> tuple:
     print(f"Успешно отправлено: {successful}, Не удалось отправить: {failed}")
     return successful, failed
 
-def send_transactions_with_timing(payloads: list, send_times: list) -> tuple:
+def send_transactions_with_timing(payloads: list, send_times: list, speed_factor: int = 1) -> tuple:
     """Отправка транзакций с учетом временных меток.
     
     Args:
         payloads: Список транзакций для отправки
         send_times: Список временных меток (в секундах) для каждой транзакции
+        speed_factor: Коэффициент ускорения (по умолчанию 1 - реальное время)
+                      Например, speed_factor = 60 означает, что 1 час будет симулироваться за 1 минуту
+                      Для 24-часовой симуляции за 1 минуту установите speed_factor = 1440
         
     Returns:
         tuple: (успешно отправлено, не удалось отправить)
@@ -85,7 +88,7 @@ def send_transactions_with_timing(payloads: list, send_times: list) -> tuple:
         logging.error(f"Количество транзакций ({len(payloads)}) не соответствует количеству временных меток ({len(send_times)})")
         return 0, 0
     
-    # Сортируем транзакции по времени отправки
+    #сортируем транзакции по времени отправки
     sorted_data = sorted(zip(payloads, send_times), key=lambda x: x[1])
     
     successful = 0
@@ -93,27 +96,29 @@ def send_transactions_with_timing(payloads: list, send_times: list) -> tuple:
     start_time = time_module.time()
     
     print(f"Начало отправки транзакций с учетом временных меток. Общее время симуляции: {send_times[-1]:.2f} секунд")
+    print(f"Коэффициент ускорения: {speed_factor}x (симуляция будет выполнена в {speed_factor} раз быстрее)")
     logging.info(f"Начало отправки транзакций с учетом временных меток. Общее время симуляции: {send_times[-1]:.2f} секунд")
+    logging.info(f"Коэффициент ускорения: {speed_factor}x (симуляция будет выполнена в {speed_factor} раз быстрее)")
     
-    # Коэффициент ускорения для тестирования (можно настроить)
-    # Например, speed_factor = 60 означает, что 1 час будет симулироваться за 1 минуту
-    # Для полной 24-часовой симуляции установите speed_factor = 1
-    speed_factor = 1
+    # расчетное время выполнения симуляции
+    estimated_runtime = send_times[-1] / speed_factor
+    print(f"Расчетное время выполнения: {estimated_runtime:.2f} секунд")
+    logging.info(f"Расчетное время выполнения: {estimated_runtime:.2f} секунд")
     
     for i, (payload, send_time) in enumerate(sorted_data):
-        # Вычисляем, сколько времени должно пройти с начала симуляции до отправки текущей транзакции
+        # считаем, сколько времени должно пройти с начала симуляции до отправки текущей транзакции
         elapsed_target = send_time / speed_factor
         
-        # Вычисляем, сколько времени фактически прошло
+        # считаем, сколько времени фактически прошло
         elapsed_actual = time_module.time() - start_time
         
-        # Если нужно - ждем до нужного момента времени
+        # если нужно - ждем до нужного момента времени
         if elapsed_actual < elapsed_target:
             wait_time = elapsed_target - elapsed_actual
             logging.info(f"Ожидание {wait_time:.2f} секунд перед отправкой транзакции {i+1}/{len(payloads)}")
             time_module.sleep(wait_time)
         
-        # Отправляем транзакцию
+        # пуляем 
         trn_id = payload['data'][0]['Data']['TrnId']
         current_time = time_module.time() - start_time
         logging.info(f"[{trn_id}] Отправка транзакции {i+1}/{len(payloads)} в момент времени {current_time:.2f} с (плановое время: {elapsed_target:.2f} с)")
@@ -123,7 +128,7 @@ def send_transactions_with_timing(payloads: list, send_times: list) -> tuple:
         else:
             failed += 1
             
-        # Выводим прогресс каждые 10% транзакций
+        # пишем прогресс каждые 10% транзакций
         if (i+1) % max(1, len(payloads)//10) == 0:
             progress = (i+1) / len(payloads) * 100
             elapsed = time_module.time() - start_time
