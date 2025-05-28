@@ -1,7 +1,7 @@
 import psycopg2
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from anomaly_detection import analyze_transaction, update_transaction_status
+from anomaly_detection import analyze_transaction
 import xmltodict
 import json
 import logging
@@ -77,7 +77,7 @@ with app.app_context():
         cur.execute("""
         CREATE TABLE IF NOT EXISTS "transactions" (
             "id" BIGSERIAL NOT NULL UNIQUE,
-            "src_id" BIGINT,
+            "client_id" BIGINT,
             "dst_id" BIGINT,
             "value" NUMERIC,
             "type_id" BIGINT,
@@ -86,11 +86,50 @@ with app.app_context():
             "timestamp" TIMESTAMP,
             "comment" TEXT,
             "status_id" BIGINT,
-            "is_bad" BOOLEAN DEFAULT FALSE,
+            "is_bad" INTEGER DEFAULT 0,
             "epoch_number" BIGINT DEFAULT 1,
             PRIMARY KEY("id")
         )
         """)
+    else:
+        #проверка, что поле is_bad имеет тип INTEGER
+        cur.execute("""
+            SELECT data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'transactions' AND column_name = 'is_bad'
+        """)
+        is_bad_type = cur.fetchone()
+        
+        #если тип не integer, изменяем его
+        if is_bad_type and is_bad_type[0] != 'integer':
+            try:
+                # Сначала удаляем значение по умолчанию
+                cur.execute("ALTER TABLE transactions ALTER COLUMN is_bad DROP DEFAULT")
+                logging.info("Значение по умолчанию для поля is_bad удалено")
+                
+                # Затем изменяем тип
+                cur.execute("ALTER TABLE transactions ALTER COLUMN is_bad TYPE integer USING CASE WHEN is_bad THEN 1 ELSE 0 END")
+                logging.info("Тип поля is_bad изменен на integer")
+                
+                # Устанавливаем новое значение по умолчанию
+                cur.execute("ALTER TABLE transactions ALTER COLUMN is_bad SET DEFAULT 0")
+                logging.info("Установлено новое значение по умолчанию для поля is_bad: 0")
+            except Exception as e:
+                logging.error(f"Ошибка при изменении типа поля is_bad: {str(e)}")
+                logging.error(traceback.format_exc())
+        
+        #проверяем наличие колонки client_id и src_id
+        cur.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'transactions' AND column_name IN ('client_id', 'src_id')
+        """)
+        columns = [row[0] for row in cur.fetchall()]
+        
+        # если есть src_id, но нет client_id, переименовываем колонку
+        if 'src_id' in columns and 'client_id' not in columns:
+            cur.execute("ALTER TABLE transactions RENAME COLUMN src_id TO client_id")
+            logging.info("Колонка src_id переименована в client_id")
     
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'clients')")
     if not cur.fetchone()[0]:
@@ -285,15 +324,16 @@ def save_transaction_to_db(transaction_data):
         narrative = data.get('Narrative', '')
         epoch_number = data.get('EpochNumber', 1)
         
-        is_suspicious, analysis_details = analyze_transaction(transaction_data)
-
-        is_bad = is_suspicious
+        #получаем значение is_bad как целое число
+        is_bad = data.get('IsBad', 0)
+        if isinstance(is_bad, bool):
+            is_bad = 1 if is_bad else 0
 
         conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
         conn.autocommit = False  
         
         try:
-            src_id = get_or_create_client(conn, payer_data)
+            client_id = get_or_create_client(conn, payer_data)
             dst_id = get_or_create_client(conn, beneficiary_data)
             type_id = get_type_id(conn, data.get('TrnType', 'C2C'))
             bank_id = get_bank_id(conn)
@@ -313,18 +353,16 @@ def save_transaction_to_db(transaction_data):
             
             cursor.execute("""
                 INSERT INTO transactions 
-                (src_id, dst_id, type_id, bnk_src_id, bnk_dst_id, status_id, value, timestamp, comment, is_bad, epoch_number)
+                (client_id, dst_id, type_id, bnk_src_id, bnk_dst_id, status_id, value, timestamp, comment, is_bad, epoch_number)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                src_id, dst_id, type_id, bank_id, bank_id, status_id, 
+                client_id, dst_id, type_id, bank_id, bank_id, status_id, 
                 amount, datetime.utcnow(), f"{narrative} (TrnId: {trn_id})", 
                 is_bad, epoch_number
             ))
             
             transaction_db_id = cursor.fetchone()[0]
-            
-            update_transaction_status(transaction_db_id, is_bad, analysis_details)
             
             conn.commit()
             logging.info(f"Транзакция с TrnId={trn_id} успешно сохранена в БД с id={transaction_db_id}")
@@ -400,11 +438,13 @@ def receive_message():
             message_json = json.dumps(message, ensure_ascii=False)
             
             try:
+                # сохр сообщение в таблицу ReceivedMessage
                 msg = ReceivedMessage(content=message_json, trn_id=trn_id)
                 db.session.add(msg)
                 db.session.commit()
                 logging.info(f"Сообщение с trn_id={trn_id} сохранено в таблицу ReceivedMessage")
                 
+                # сохр транзакцию в таблицу transactions
                 transaction_saved = save_transaction_to_db(message)
                 
                 status = "Ok"
