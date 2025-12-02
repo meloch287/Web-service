@@ -3,7 +3,6 @@ from datetime import datetime
 from app.database import Base
 
 def utcnow():
-    """Return naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE"""
     return datetime.utcnow()
 
 class TrafficRequest(Base):

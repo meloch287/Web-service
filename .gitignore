@@ -37,3 +37,6 @@ Thumbs.db
 
 # Environment
 .env
+
+# Kiro
+.kiro/

@@ -6,15 +6,17 @@
 
 1. [Обзор системы](#обзор-системы)
 2. [Теория массового обслуживания G/G/c/K](#теория-массового-обслуживания-ggck)
-3. [Симуляция СБП](#симуляция-сбп)
-4. [Математическое моделирование](#математическое-моделирование)
-5. [Статистический анализ](#статистический-анализ)
-6. [SLA-анализ](#sla-анализ)
-7. [Архитектура](#архитектура)
-8. [Хранение данных](#хранение-данных)
-9. [Установка и настройка](#установка-и-настройка)
-10. [API Reference](#api-reference)
-11. [Примеры использования](#примеры-использования)
+3. [Формализация потоков N_bg(t) и N_anom(t)](#формализация-потоков)
+4. [Симуляция СБП](#симуляция-сбп)
+5. [Симуляция банковских транзакций](#симуляция-банковских-транзакций)
+6. [Математическое моделирование](#математическое-моделирование)
+7. [Статистический анализ](#статистический-анализ)
+8. [SLA-анализ](#sla-анализ)
+9. [Архитектура](#архитектура)
+10. [Хранение данных](#хранение-данных)
+11. [Установка и настройка](#установка-и-настройка)
+12. [API Reference](#api-reference)
+13. [Примеры использования](#примеры-использования)
 
 ---
 
@@ -93,6 +95,151 @@ E[T_fail] = 1 / λ_margin
 ```
 
 где `λ_margin = (ρ_threshold - ρ) × c × μ`
+
+---
+
+## Формализация потоков
+
+### Суперпозиция потоков N(t) = N_bg(t) + N_anom(t)
+
+Общий поток транзакций разделяется на два компонента:
+
+**Фоновый поток N_bg(t)** — легитимный трафик по гауссовой формуле:
+```
+N_bg(t) = A × exp(-(t - t_m)² / (2σ²))
+```
+
+где:
+- `A` — амплитуда пика (макс. транзакций/сек)
+- `t_m` — время достижения максимума
+- `σ` — стандартное отклонение (ширина пика)
+
+**Аномальный поток N_anom(t)** — атакующий трафик с выбираемым распределением:
+- Normal (Gaussian)
+- Exponential
+- Poisson
+- Pareto (heavy-tail)
+
+### Использование
+
+```python
+from app.models import TrafficFlowConfig, BackgroundTrafficParams, AnomalousTrafficParams, DistributionParams, DistributionType
+from app.traffic import TrafficFlowGenerator
+
+config = TrafficFlowConfig(
+    background=BackgroundTrafficParams(A=1000, t_m=12.0, sigma=4.0),
+    anomalous=AnomalousTrafficParams(
+        distribution=DistributionType.EXPONENTIAL,
+        total_volume=5000,
+        start_time=10.0,
+        duration=5.0,
+        params=DistributionParams(rate=2.0)
+    )
+)
+
+generator = TrafficFlowGenerator(config)
+time_series = generator.generate_time_series(0, 24, dt=0.1)
+
+print(f"Background: {time_series.background_count}")
+print(f"Anomalous: {time_series.anomalous_count}")
+```
+
+### GGcKQueueingSystem
+
+```python
+from app.models import QueueingSystemConfig
+from app.analysis import GGcKQueueingSystem
+
+config = QueueingSystemConfig(c=10, K=1000, mu=100.0, sla_epsilon=0.01, sla_delta=0.05)
+system = GGcKQueueingSystem(config)
+
+analysis = system.analyze(time_series)
+report = system.generate_report(analysis)
+
+print(f"ρ avg: {analysis.utilization.avg_utilization:.2f}")
+print(f"D_loss: {analysis.d_loss.d_loss:.4f}")
+print(f"E[T_fail]: {analysis.e_t_fail:.2f}s")
+print(f"SLA compliant: {report.overall_compliant}")
+```
+
+### Маркировка транзакций
+
+Каждая транзакция маркируется для ML-разметки:
+```python
+{
+    "traffic_type": "background" | "anomalous",
+    "distribution": "gaussian" | "exponential" | "poisson" | "pareto"
+}
+```
+
+### Спецификация
+
+Полная спецификация доступна в `.kiro/specs/traffic-flow-formalization/`:
+- `requirements.md` — требования EARS/INCOSE
+- `design.md` — архитектура и correctness properties
+- `tasks.md` — план реализации
+from app.analysis import GGcKQueueingSystem
+
+config = QueueingSystemConfig(c=10, K=1000, mu=100.0, sla_epsilon=0.01, sla_delta=0.05)
+system = GGcKQueueingSystem(config)
+
+analysis = system.analyze(time_series)
+report = system.generate_report(analysis)
+
+print(f"D_loss: {report.d_loss}")
+print(f"SLA Compliant: {report.overall_compliant}")
+```
+
+### Маркировка транзакций
+
+Каждая транзакция маркируется для ML-разметки:
+```python
+{
+    "traffic_type": "background" | "anomalous",
+    "distribution": "gaussian" | "exponential" | "poisson" | "pareto"
+}
+```
+
+---
+
+## Формализация потоков
+
+### Суперпозиция потоков N(t) = N_bg(t) + N_anom(t)
+
+Общий поток транзакций разделяется на два компонента:
+
+**Фоновый поток N_bg(t)** — легитимный трафик по гауссовой формуле:
+```
+N_bg(t) = A × exp(-(t - t_m)² / (2σ²))
+```
+
+где:
+- `A` — амплитуда пика (макс. транзакций/сек)
+- `t_m` — время достижения максимума
+- `σ` — стандартное отклонение (ширина пика)
+
+**Аномальный поток N_anom(t)** — атакующий трафик с выбираемым распределением:
+- Normal (Gaussian)
+- Exponential
+- Poisson
+- Pareto (heavy-tail)
+
+### Маркировка транзакций
+
+Каждая транзакция маркируется для ML-разметки:
+```python
+{
+    "traffic_type": "background" | "anomalous",
+    "distribution": "gaussian" | "exponential" | "poisson" | "pareto"
+}
+```
+
+### Спецификация
+
+Полная спецификация доступна в `.kiro/specs/traffic-flow-formalization/`:
+- `requirements.md` — требования EARS/INCOSE
+- `design.md` — архитектура и correctness properties
+- `tasks.md` — план реализации
 
 ---
 
