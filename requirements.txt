@@ -1,7 +1,10 @@
-Flask==3.0.2
-Flask-SQLAlchemy==3.1.1
-requests==2.31.0
-psycopg2==2.9.9
-xmltodict==0.13.0
-dicttoxml==1.7.16
-requests
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+httpx==0.26.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+orjson==3.9.10
+aiofiles==23.2.1
