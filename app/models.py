@@ -1,6 +1,10 @@
 from sqlalchemy import Column, BigInteger, Integer, String, Text, DateTime, Float, Boolean, Index
-from datetime import datetime, timezone
+from datetime import datetime
 from app.database import Base
+
+def utcnow():
+    """Return naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE"""
+    return datetime.utcnow()
 
 class TrafficRequest(Base):
     __tablename__ = "traffic_requests"
@@ -39,7 +43,7 @@ class TestSession(Base):
     session_id = Column(String(50), unique=True, nullable=False)
     name = Column(String(255))
     attack_type = Column(String(30))
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, default=utcnow)
     ended_at = Column(DateTime)
     total_requests = Column(Integer, default=0)
     requests_sent = Column(Integer, default=0)
@@ -56,7 +60,7 @@ class BlockedRequest(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     request_id = Column(String(50), nullable=False, index=True)
     session_id = Column(String(50), index=True)
-    blocked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    blocked_at = Column(DateTime, default=utcnow)
     blocked_by = Column(String(50))
     block_reason = Column(Text)
     source_ip = Column(String(45))
@@ -66,7 +70,7 @@ class LatencyMetric(Base):
     __tablename__ = "latency_metrics"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     session_id = Column(String(50), index=True)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime, default=utcnow)
     interval_seconds = Column(Integer, default=1)
     requests_count = Column(Integer, default=0)
     avg_latency_ms = Column(Float)
@@ -82,7 +86,7 @@ class ProtectionEvent(Base):
     session_id = Column(String(50), index=True)
     event_type = Column(String(50))
     source = Column(String(50))
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime, default=utcnow)
     details = Column(Text)
     severity = Column(String(20))
     source_ip = Column(String(45))

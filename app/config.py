@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     receiver_host: str = "0.0.0.0"
     receiver_port: int = 5001
     
-    receiver_url: str = "http://192.168.20.2:5001"
-    sender_callback_url: str = "http://192.168.10.2:5000"
+    receiver_url: str = "http://127.0.0.1:5001"
+    sender_callback_url: str = "http://127.0.0.1:5000"
     
     max_workers: int = 100
     request_timeout: float = 30.0

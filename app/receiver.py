@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Depends
 from fastapi.responses import ORJSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List
 from contextlib import asynccontextmanager
 import time
@@ -65,7 +65,7 @@ async def health():
     return {
         "status": "running",
         "service": "receiver",
-        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
         "uptime_seconds": time.time() - start_time,
         "requests_processed": requests_processed
     }
@@ -77,7 +77,7 @@ async def health_check():
 @app.post("/receive")
 async def receive_traffic(request: Request, db: AsyncSession = Depends(get_db)):
     global requests_processed
-    receive_time = datetime.now(timezone.utc)
+    receive_time = datetime.utcnow()
     client_ip = get_client_ip(request)
     
     try:
@@ -103,7 +103,10 @@ async def receive_traffic(request: Request, db: AsyncSession = Depends(get_db)):
         attack_type = req_data.get("attack_type", "normal")
         
         try:
+            # Parse timestamp and convert to naive UTC
             sent_time = datetime.fromisoformat(sent_timestamp.replace("Z", "+00:00"))
+            if sent_time.tzinfo is not None:
+                sent_time = sent_time.replace(tzinfo=None)
             response_time_ms = (receive_time - sent_time).total_seconds() * 1000
         except:
             response_time_ms = 0
