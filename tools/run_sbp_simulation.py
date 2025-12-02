@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-Симулятор Системы Быстрых Платежей (СБП)
-Моделирование платежной системы с теорией массового обслуживания G/G/c/K
+Автономный симулятор Системы Быстрых Платежей (СБП).
+Моделирование платежной системы с теорией массового обслуживания G/G/c/K.
+Не использует сеть - всё в памяти.
+
+Не используется в основном потоке обмена sender→receiver.
 """
+import sys
+sys.path.insert(0, '..')
+
 import asyncio
 import random
 import uuid
@@ -25,6 +31,7 @@ QUEUE_CAPACITY = 1000
 SERVICE_RATE = 100.0
 SIMULATION_HOURS = 24
 
+
 @dataclass
 class PaymentTransaction:
     transaction_id: str
@@ -40,6 +47,7 @@ class PaymentTransaction:
     is_completed: bool = False
     is_rejected: bool = False
     rejection_reason: str = ""
+
 
 class PaymentSystemSimulator:
     def __init__(self, num_servers: int, queue_capacity: int, service_rate: float):
@@ -72,18 +80,6 @@ class PaymentSystemSimulator:
             timestamp=timestamp,
             anomaly_type=PaymentAnomalyType.NORMAL
         )
-    
-    def generate_micro_transaction(self, timestamp: datetime) -> PaymentTransaction:
-        tx = self.generate_normal_transaction(timestamp)
-        tx.amount = round(random.uniform(1, 100), 2)
-        tx.anomaly_type = PaymentAnomalyType.MICRO_TRANSACTION
-        return tx
-    
-    def generate_high_amount_transaction(self, timestamp: datetime) -> PaymentTransaction:
-        tx = self.generate_normal_transaction(timestamp)
-        tx.amount = round(random.uniform(500000, 5000000), 2)
-        tx.anomaly_type = PaymentAnomalyType.HIGH_AMOUNT
-        return tx
     
     def generate_anomaly_transaction(self, timestamp: datetime, anomaly_type: int) -> PaymentTransaction:
         tx = self.generate_normal_transaction(timestamp)
@@ -137,23 +133,28 @@ class PaymentSystemSimulator:
         self.stats["rho_series"].append(metrics.rho)
         self.stats["p_block_series"].append(metrics.p_block)
         self.stats["queue_lengths"].append(len(self.queue))
+        
         if len(self.queue) >= self.queue_capacity:
             tx.state = TransactionState.REJECTED
             tx.is_rejected = True
             tx.rejection_reason = "queue_full"
             self.markov.record_transition(TransactionState.QUEUED, TransactionState.REJECTED)
             return tx
+        
         if random.random() < metrics.p_block:
             tx.state = TransactionState.REJECTED
             tx.is_rejected = True
             tx.rejection_reason = "system_overload"
             self.markov.record_transition(TransactionState.QUEUED, TransactionState.REJECTED)
             return tx
+        
         queue_time = metrics.e_wait * 1000 * random.uniform(0.5, 1.5)
         tx.queue_time_ms = queue_time
         self.markov.record_transition(TransactionState.QUEUED, TransactionState.PROCESSING)
+        
         processing_time = (1 / self.service_rate) * 1000 * random.uniform(0.8, 1.2)
         tx.processing_time_ms = processing_time
+        
         if tx.anomaly_type == PaymentAnomalyType.HIGH_AMOUNT:
             if random.random() < 0.3:
                 tx.state = TransactionState.REJECTED
@@ -161,6 +162,7 @@ class PaymentSystemSimulator:
                 tx.rejection_reason = "amount_limit_exceeded"
                 self.markov.record_transition(TransactionState.PROCESSING, TransactionState.REJECTED)
                 return tx
+        
         if tx.anomaly_type == PaymentAnomalyType.VELOCITY_SPIKE:
             if random.random() < 0.2:
                 tx.state = TransactionState.REJECTED
@@ -168,12 +170,14 @@ class PaymentSystemSimulator:
                 tx.rejection_reason = "rate_limit"
                 self.markov.record_transition(TransactionState.PROCESSING, TransactionState.REJECTED)
                 return tx
+        
         if queue_time + processing_time > 5000:
             tx.state = TransactionState.TIMEOUT
             tx.is_rejected = True
             tx.rejection_reason = "timeout"
             self.markov.record_transition(TransactionState.PROCESSING, TransactionState.TIMEOUT)
             return tx
+        
         tx.state = TransactionState.COMPLETED
         tx.is_completed = True
         self.markov.record_transition(TransactionState.PROCESSING, TransactionState.COMPLETED)
@@ -189,12 +193,15 @@ class PaymentSystemSimulator:
         print(f"Скорость обслуживания: {self.service_rate} tx/s")
         print(f"Базовая интенсивность: {base_lambda} tx/s")
         print(f"{'='*70}\n")
+        
         print("Генерация транзакций...")
         arrivals = self.generate_transaction_arrivals(base_lambda, duration_hours)
         print(f"Сгенерировано {len(arrivals)} транзакций")
+        
         print("\nОбработка транзакций...")
         window_size = 100
         current_window = []
+        
         for i, arrival in enumerate(arrivals):
             tx = arrival["transaction"]
             hour = arrival["timestamp"].hour
@@ -202,15 +209,19 @@ class PaymentSystemSimulator:
             self.stats["by_hour"][hour]["arrived"] += 1
             self.stats["by_anomaly"][tx.anomaly_type]["count"] += 1
             self.stats["n_tot_series"].append(1)
+            
             current_window.append(arrival["timestamp"])
             if len(current_window) > window_size:
                 current_window.pop(0)
+            
             if len(current_window) > 1:
                 time_span = (current_window[-1] - current_window[0]).total_seconds()
                 current_load = len(current_window) / max(time_span, 0.001)
             else:
                 current_load = base_lambda
+            
             tx = self.process_transaction(tx, current_load)
+            
             if tx.is_completed:
                 self.stats["completed"] += 1
                 self.stats["by_hour"][hour]["completed"] += 1
@@ -227,8 +238,10 @@ class PaymentSystemSimulator:
                 self.rejected.append(tx)
                 if tx.state == TransactionState.TIMEOUT:
                     self.stats["timeout"] += 1
+            
             if (i + 1) % 10000 == 0:
                 print(f"  Обработано {i+1}/{len(arrivals)} транзакций...")
+        
         self.print_results()
         self.generate_charts()
 
@@ -236,28 +249,35 @@ class PaymentSystemSimulator:
         print(f"\n{'='*70}")
         print(f"РЕЗУЛЬТАТЫ СИМУЛЯЦИИ СБП")
         print(f"{'='*70}")
+        
         total = self.stats["total_transactions"]
         completed = self.stats["completed"]
         rejected = self.stats["rejected"]
+        
         print(f"\n--- Общая статистика ---")
         print(f"Всего транзакций: {total}")
         print(f"Успешно обработано: {completed} ({completed/total*100:.2f}%)")
         print(f"Отклонено: {rejected} ({rejected/total*100:.2f}%)")
         print(f"Таймауты: {self.stats['timeout']}")
+        
         d_loss = self.queuing.calculate_d_loss(
             self.stats["p_block_series"], 
             self.stats["n_tot_series"]
         )
+        
         print(f"\n--- Метрики теории массового обслуживания ---")
         print(f"D_loss (доля потерянных): {d_loss:.4f} ({d_loss*100:.2f}%)")
+        
         if self.stats["rho_series"]:
             avg_rho = np.mean(self.stats["rho_series"])
             max_rho = max(self.stats["rho_series"])
             print(f"Средний коэффициент загрузки ρ: {avg_rho:.4f}")
             print(f"Максимальный ρ: {max_rho:.4f}")
+        
         if self.stats["p_block_series"]:
             avg_p_block = np.mean(self.stats["p_block_series"])
             print(f"Средняя P_block: {avg_p_block:.4f}")
+        
         if self.stats["latencies"]:
             lats = self.stats["latencies"]
             print(f"\n--- Время обработки (мс) ---")
@@ -269,6 +289,7 @@ class PaymentSystemSimulator:
             avg_proc = self.stats["total_processing_time_ms"] / max(completed, 1)
             print(f"Среднее время в очереди: {avg_queue:.2f} мс")
             print(f"Среднее время обработки: {avg_proc:.2f} мс")
+        
         print(f"\n--- По типам аномалий ---")
         for anomaly_type in range(8):
             data = self.stats["by_anomaly"][anomaly_type]
@@ -276,12 +297,15 @@ class PaymentSystemSimulator:
                 success_rate = data["completed"] / data["count"] * 100
                 name = PaymentAnomalyType.to_russian(anomaly_type)
                 print(f"{name}: {data['count']} транзакций, успех: {success_rate:.1f}%")
+        
         stationary = self.markov.get_stationary_distribution()
         print(f"\n--- Марковская модель (стационарное распределение) ---")
         for state, prob in stationary.items():
             print(f"  {state.value}: {prob:.4f}")
+        
         completion_prob = self.markov.get_completion_probability(steps=10)
         print(f"Вероятность успешного завершения (10 шагов): {completion_prob:.4f}")
+        
         print(f"\n--- Почасовое распределение ---")
         max_arrived = max(h["arrived"] for h in self.stats["by_hour"].values())
         for hour in range(24):
@@ -289,6 +313,7 @@ class PaymentSystemSimulator:
             bar_len = int(data["arrived"] / max(max_arrived, 1) * 30)
             success_rate = data["completed"] / max(data["arrived"], 1) * 100
             print(f"{hour:02d}:00 | {'█' * bar_len} {data['arrived']} (успех: {success_rate:.0f}%)")
+        
         print(f"{'='*70}")
 
     def generate_charts(self):
@@ -299,7 +324,6 @@ class PaymentSystemSimulator:
         
         ax1 = fig.add_subplot(2, 3, 1)
         hours = list(range(24))
-        arrived = [self.stats["by_hour"][h]["arrived"] for h in hours]
         completed = [self.stats["by_hour"][h]["completed"] for h in hours]
         rejected = [self.stats["by_hour"][h]["rejected"] for h in hours]
         ax1.bar(hours, completed, color='#2ecc71', label='Успешные')
@@ -340,7 +364,7 @@ class PaymentSystemSimulator:
             ax4.axvline(np.percentile(self.stats["latencies"], 95), color='orange', linestyle='--', linewidth=2, label=f'P95 = {np.percentile(self.stats["latencies"], 95):.1f}мс')
             ax4.set_xlabel('Время обработки (мс)')
             ax4.set_ylabel('Частота')
-            ax4.set_title('Распределение времени обработки\n(Полячека-Хинчин)')
+            ax4.set_title('Распределение времени обработки')
             ax4.legend(fontsize=8)
         
         ax5 = fig.add_subplot(2, 3, 5)
@@ -366,12 +390,13 @@ class PaymentSystemSimulator:
             ax6.legend()
         
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        output_dir = "reports"
+        output_dir = "../reports"
         os.makedirs(output_dir, exist_ok=True)
         filename = f"{output_dir}/sbp_{self.session_id}.png"
         plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
         print(f"\n📊 Графики сохранены: {filename}")
         plt.show()
+
 
 def main():
     parser = argparse.ArgumentParser(description="СБП Simulator")
@@ -381,8 +406,10 @@ def main():
     parser.add_argument("--lambda", dest="lambda_rate", type=float, default=50.0, help="Интенсивность λ (tx/s)")
     parser.add_argument("--hours", type=int, default=24, help="Длительность симуляции (часы)")
     args = parser.parse_args()
+    
     simulator = PaymentSystemSimulator(args.servers, args.queue, args.rate)
     simulator.run_simulation(args.lambda_rate, args.hours)
+
 
 if __name__ == "__main__":
     main()
