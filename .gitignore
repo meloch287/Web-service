@@ -1,27 +1,39 @@
-Python
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-*.pyc pycache/ *.pyo *.pyd .Python env/ venv/ ENV/ env.bak/ venv.bak/
-
-Logs
-
+# Logs
 *.log
 
-Generated files
+# Generated files
+generated_transactions/
 
-generated_transactions/ *.png
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
-IDE and editor files
+# Database
+*.sqlite3
+*.db
 
-.vscode/ .idea/ *.sublime-project *.sublime-workspace
+# OS generated files
+.DS_Store
+Thumbs.db
 
-Database
+# Other
+*.bak
+*.swp
+*~
 
-*.sqlite3 *.db
-
-OS generated files
-
-.DS_Store Thumbs.db
-
-Other
-
-*.bak *.swp *~
+# Environment
+.env
