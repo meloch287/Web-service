@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Тесты для TrafficFlowGenerator и GGcKQueueingSystem.
-Не используется в основном потоке обмена.
-"""
 import sys
 sys.path.insert(0, '..')
 
