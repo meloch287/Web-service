@@ -99,8 +99,8 @@ sbp-platform/
 ### 1. Клонирование и настройка окружения
 
 ```bash
-git clone <repository-url>
-cd sbp-platform
+git clone https://github.com/meloch287/Web-service.git
+cd Web-service
 
 # Создание виртуального окружения
 python -m venv venv
