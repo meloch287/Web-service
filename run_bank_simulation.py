@@ -326,9 +326,25 @@ class BankSimulator:
         ax1.bar(hours, poisson_counts, bottom=normal_counts, color='#e74c3c', edgecolor='white', linewidth=0.5, label='Аномалии (Пуассон)')
         ax1.bar(hours, pareto_counts, bottom=bottom2, color='#9b59b6', edgecolor='white', linewidth=0.5, label='Аномалии (Парето)')
         ax1.bar(hours, exp_counts, bottom=bottom3, color='#f39c12', edgecolor='white', linewidth=0.5, label='Аномалии (Экспон.)')
+        
+        # Теоретическое нормальное распределение (одна плавная кривая)
+        # Пик в 12:00 (полдень), стд. отклонение 4 часа
+        total_transactions = sum(self.stats["by_hour"].values())
+        if total_transactions > 0:
+            x_smooth = np.linspace(0, 23, 200)
+            # Простое нормальное распределение с пиком в середине дня
+            theoretical = stats.norm.pdf(x_smooth, loc=12, scale=4)
+            # Масштабируем под фактическое количество транзакций
+            theoretical_scaled = theoretical / theoretical.max() * max(self.stats["by_hour"].values())
+            ax1_twin = ax1.twinx()
+            ax1_twin.plot(x_smooth, theoretical_scaled, 'r--', linewidth=2.5, label='Теоретическое')
+            ax1_twin.set_ylabel('Теоретическое распределение', color='red')
+            ax1_twin.tick_params(axis='y', labelcolor='red')
+            ax1_twin.legend(loc='upper right', fontsize=6)
+        
         ax1.set_xlabel('Время суток')
         ax1.set_ylabel('Количество транзакций')
-        ax1.set_title('Распределение транзакций за 24 часа')
+        ax1.set_title('Распределение транзакций за 24 часа\n(Нормальное распределение)')
         ax1.set_xticks(range(0, 24, 2))
         ax1.legend(loc='upper left', fontsize=6)
         
@@ -376,15 +392,25 @@ class BankSimulator:
         ax4 = fig.add_subplot(2, 3, 4)
         if self.stats["latencies"]:
             lats = self.stats["latencies"]
-            ax4.hist(lats, bins=50, color='#3498db', edgecolor='white', alpha=0.7)
-            ax4.axvline(np.mean(lats), color='red', linestyle='--', linewidth=2, 
-                       label=f'Среднее: {np.mean(lats):.1f}мс')
-            ax4.axvline(np.percentile(lats, 95), color='orange', linestyle='--', linewidth=2,
+            # Гистограмма фактических значений (нормализованная для сравнения с PDF)
+            n, bins, patches = ax4.hist(lats, bins=50, color='#3498db', edgecolor='white', 
+                                        alpha=0.7, density=True, label='Фактическое')
+            
+            # Теоретическое нормальное распределение
+            mean_lat = np.mean(lats)
+            std_lat = np.std(lats)
+            x_theory = np.linspace(min(lats), max(lats), 200)
+            y_theory = stats.norm.pdf(x_theory, loc=mean_lat, scale=std_lat)
+            ax4.plot(x_theory, y_theory, 'r-', linewidth=2.5, 
+                    label=f'Теор. норм. (μ={mean_lat:.1f}, σ={std_lat:.1f})')
+            
+            ax4.axvline(mean_lat, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+            ax4.axvline(np.percentile(lats, 95), color='orange', linestyle='--', linewidth=1.5,
                        label=f'P95: {np.percentile(lats, 95):.1f}мс')
             ax4.set_xlabel('Задержка (мс)')
-            ax4.set_ylabel('Частота')
-            ax4.set_title('Распределение времени отклика')
-            ax4.legend(fontsize=8)
+            ax4.set_ylabel('Плотность вероятности')
+            ax4.set_title('Распределение времени отклика\n(факт vs теория)')
+            ax4.legend(fontsize=7, loc='upper right')
         
         # График 5: Теоретические распределения
         ax5 = fig.add_subplot(2, 3, 5)
