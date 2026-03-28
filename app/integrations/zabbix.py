@@ -4,12 +4,14 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
+
 @dataclass
 class ZabbixHost:
     host_id: str
     name: str
     ip: str
     status: str
+
 
 @dataclass
 class ZabbixMetric:
@@ -19,6 +21,7 @@ class ZabbixMetric:
     value: float
     timestamp: datetime
     host: str
+
 
 class ZabbixClient:
     def __init__(self, url: str, user: str, password: str):

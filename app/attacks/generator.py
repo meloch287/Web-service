@@ -8,8 +8,8 @@ from enum import Enum
 
 from app.attacks.patterns import (
     AttackCategory, get_random_pattern, generate_random_payload,
-    generate_malicious_headers, get_attack_categories
-)
+    generate_malicious_headers, get_attack_categories)
+
 
 class TrafficMode(str, Enum):
     NORMAL = "normal"
